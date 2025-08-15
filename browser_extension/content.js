@@ -1,0 +1,2 @@
+// Ctrl+Shift+A to anonymize selection
+document.addEventListener('keydown', (e)=>{ if(e.ctrlKey && e.shiftKey && e.code==='KeyA'){ const sel = window.getSelection().toString(); if(!sel) return; chrome.runtime.sendMessage({type:'ANON', text: sel}, (resp)=>{ if(resp && resp.ok){ navigator.clipboard.writeText(resp.data.text); alert('Anonymized text copied to clipboard'); } else { alert('Error: ' + (resp?.error || 'unknown')); } }); } });

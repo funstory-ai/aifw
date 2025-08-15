@@ -1,0 +1,9 @@
+<!doctype html>
+<html><body>
+  <h3>OneAIFW Extension Options</h3>
+  Service URL: <input id="url" size=40><br><br>
+  <button id="save">Save</button>
+  <script>
+document.getElementById('save').onclick = async ()=>{ await chrome.storage.sync.set({serviceUrl: document.getElementById('url').value}); alert('Saved'); };
+</script>
+</body></html>

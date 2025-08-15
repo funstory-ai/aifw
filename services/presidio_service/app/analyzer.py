@@ -1,0 +1,69 @@
+from presidio_analyzer import AnalyzerEngine, PatternRecognizer
+from presidio_analyzer import Pattern, RecognizerRegistry
+from presidio_analyzer.nlp_engine import NlpEngineProvider
+from typing import List
+from dataclasses import dataclass
+import re
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class EntitySpan:
+    entity_type: str
+    start: int
+    end: int
+    score: float
+    text: str
+
+
+def _try_spacy_configuration():
+    try:
+        import spacy
+        try:
+            spacy.load('en_core_web_sm')
+            model = 'en_core_web_sm'
+        except Exception:
+            model = None
+        if model:
+            return {'nlp_engine_name': 'spacy',
+                    'models': [{'lang_code': 'en', 'model_name': model}]}
+        else:
+            return {'nlp_engine_name': 'spacy',
+                    'models': [{'lang_code': 'en', 'model_name': 'en'}]}
+    except Exception as e:
+        logger.warning('spaCy not available: %s', e)
+        return {'nlp_engine_name': 'spacy',
+                'models': [{'lang_code': 'en', 'model_name': 'en'}]}
+
+
+def _custom_recognizers():
+    patterns = []
+    phone_pattern = Pattern(name='CN Phone', regex=re.compile(r'(?:\+?86[-\s]?)?(1[3-9]\d[-\s]?\d{4}[-\s]?\d{4})'), score=0.6)
+    patterns.append(PatternRecognizer(supported_entity='PHONE_NUMBER', patterns=[phone_pattern], context=['电话', '手机', 'phone']))
+    email_pattern = Pattern(name='Email', regex=re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'), score=0.7)
+    patterns.append(PatternRecognizer(supported_entity='EMAIL_ADDRESS', patterns=[email_pattern], context=['邮箱', 'email']))
+    cnid_pattern = Pattern(name='CN ID', regex=re.compile(r'\b[1-9]\d{5}(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[0-9Xx]\b'), score=0.7)
+    patterns.append(PatternRecognizer(supported_entity='CN_ID', patterns=[cnid_pattern], context=['身份证', 'ID']))
+    ipv4_pattern = Pattern(name='IPv4', regex=re.compile(r'\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b'), score=0.6)
+    patterns.append(PatternRecognizer(supported_entity='IP_ADDRESS', patterns=[ipv4_pattern], context=['IP', '地址']))
+    return patterns
+
+
+class AnalyzerWrapper:
+    def __init__(self):
+        cfg = _try_spacy_configuration()
+        provider = NlpEngineProvider(nlp_configuration=cfg)
+        nlp_engine = provider.create_engine()
+        registry = RecognizerRegistry()
+        registry.load_predefined_recognizers(nlp_engine=nlp_engine)
+        for r in _custom_recognizers():
+            registry.add_recognizer(r)
+        self.engine = AnalyzerEngine(nlp_engine=nlp_engine, registry=registry)
+
+    def analyze(self, text: str, language: str = 'en') -> List[EntitySpan]:
+        results = self.engine.analyze(text=text, language=language)
+        return [EntitySpan(r.entity_type, r.start, r.end, r.score,
+                           text[r.start:r.end])
+                for r in results]

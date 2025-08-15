@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "OneAIFW Anonymizer",
+  "version": "0.1.0",
+  "description": "Anonymize selected text using OneAIFW local Presidio service",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "action": {
+    "default_title": "OneAIFW Anonymizer"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html"
+}

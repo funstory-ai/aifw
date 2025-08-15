@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="540">
+  <style>
+    .title { font: bold 20px sans-serif; }
+    .box { fill:#f6f8fa; stroke:#333; stroke-width:1.2; rx:10; }
+    .text { font: 13px sans-serif; }
+    .muted { font: 11px sans-serif; fill:#555; }
+  </style>
+  <text x="30" y="36" class="title">OneAIFW - Local Presidio Architecture</text>
+
+  <rect x="30" y="70" width="240" height="120" class="box"/>
+  <text x="45" y="100" class="text">Browser Extension (MV3)</text>
+  <text x="45" y="122" class="muted">- Select text, Ctrl+Shift+A</text>
+  <text x="45" y="138" class="muted">- Calls local /api/anonymize</text>
+
+  <rect x="320" y="70" width="260" height="120" class="box"/>
+  <text x="335" y="100" class="text">Desktop UI (Tkinter)</text>
+  <text x="335" y="122" class="muted">- Calls local service</text>
+  <text x="335" y="138" class="muted">- Displays placeholdersMap</text>
+
+  <rect x="640" y="40" width="320" height="260" class="box"/>
+  <text x="660" y="74" class="text">Presidio Service (FastAPI)</text>
+  <text x="660" y="98" class="muted">- presidio-analyzer: AnalyzerEngine (spaCy + PatternRecognizer)</text>
+  <text x="660" y="114" class="muted">- presidio-anonymizer: AnonymizerEngine</text>
+  <text x="660" y="130" class="muted">- Endpoints: /api/analyze, /api/anonymize, /api/restore</text>
+  <text x="660" y="146" class="muted">- Generates translation-safe placeholders: __PII_*__</text>
+
+  <rect x="660" y="200" width="240" height="90" class="box"/>
+  <text x="680" y="222" class="text">Models and Recognizers</text>
+  <text x="680" y="240" class="muted">- spaCy models (optional)</text>
+  <text x="680" y="256" class="muted">- PatternRecognizers (regex)</text>
+
+  <line x1="270" y1="130" x2="320" y2="130" stroke="#333" marker-end="url(#arrow)"/>
+  <line x1="580" y1="130" x2="640" y2="130" stroke="#333" marker-end="url(#arrow)"/>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="0" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#333" />
+    </marker>
+  </defs>
+
+  <text x="30" y="480" class="muted">Note: Placeholders are safe for MT/LLM round trips. Consider storing placeholdersMap in a session store (Redis) for large workflows.</text>
+</svg>
