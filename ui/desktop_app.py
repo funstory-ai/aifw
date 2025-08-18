@@ -1,25 +1,23 @@
-"""OneAIFW Desktop UI (Tkinter) - simple client for the Presidio service"""
+"""OneAIFW Desktop UI (Tkinter) - local API client (no HTTP)."""
 import tkinter as tk
 from tkinter import ttk, messagebox
-import requests, json
+import json
+import sys, os
 
-SERVICE_URL = "http://127.0.0.1:8000"
-API_KEY = None  # set if your service uses an API key
+# Ensure project root is on sys.path for package imports when running from `ui/`
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-def post(path, payload):
-    headers = {"Content-Type":"application/json"}
-    if API_KEY:
-        headers["X-API-Key"] = API_KEY
-    r = requests.post(SERVICE_URL + path, json=payload, headers=headers)
-    r.raise_for_status()
-    return r.json()
+# Use local in-process API to avoid HTTP dependency
+from services.presidio_service.app import local_api
 
 def do_anonymize():
     txt = txt_in.get("1.0", tk.END).strip()
     if not txt:
         return
     try:
-        res = post("/api/anonymize", {"text": txt})
+        res = local_api.anonymize(text=txt)
         txt_out.delete("1.0", tk.END)
         txt_out.insert(tk.END, json.dumps(res, ensure_ascii=False, indent=2))
     except Exception as e:
@@ -28,7 +26,11 @@ def do_anonymize():
 def do_restore():
     try:
         data = json.loads(txt_out.get("1.0", tk.END))
-        res = post("/api/restore", {"text": data.get("text", ""), "placeholdersMap": data.get("placeholdersMap", {})})
+        restored_text = local_api.restore(
+            text=data.get("text", ""),
+            placeholders_map=data.get("placeholdersMap", {}),
+        )
+        res = {"text": restored_text}
         txt_out.delete("1.0", tk.END)
         txt_out.insert(tk.END, json.dumps(res, ensure_ascii=False, indent=2))
     except Exception as e:

@@ -1,1 +1,1 @@
-__all__ = ['main','analyzer','anonymizer']
+__all__ = ['main','analyzer','anonymizer','local_api']
