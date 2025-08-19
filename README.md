@@ -39,6 +39,10 @@ python -m oneaifw_cli anonymize --text "My email is test@example.com"
 echo "My phone is 13800001111" | python -m oneaifw_cli anonymize -
 python -m oneaifw_cli analyze --text "Contact me at test@example.com"
 python -m oneaifw_cli restore --text "Hello __PII_EMAIL_ADDRESS_abcd1234__" -p '{"__PII_EMAIL_ADDRESS_abcd1234__":"test@example.com"}'
+
+# Translate text that has privacy informationvia LiteLLM (OpenAI compatible LLM API)
+python -m oneaifw_cli translate --api-key-file ../../api-keys/glm-free-apikey.json --to zh "My email is test@example.com, My phone number is 18744325579"
+
 ```
 
 ## Browser Extension
@@ -49,4 +53,7 @@ Load `browser_extension` as unpacked extension in Chrome/Edge developer mode.
 - spaCy 模型：首次使用请安装 `en_core_web_sm`，否则会报错找不到 `en_core_web_sm`。
   - 安装：`python -m spacy download en_core_web_sm`
   - 若使用虚拟环境，请在对应 venv 中执行安装命令。
+- 若使用翻译功能，请设置相应的环境变量，例如：
+  - OpenAI: `export OPENAI_API_KEY=sk-...`
+  - Azure OpenAI、OpenRouter、Anthropic 等参见 LiteLLM 文档（模型名通过 `--model` 指定）。
 - The anonymization uses placeholders that are robust to machine translation/LLM round-trips.

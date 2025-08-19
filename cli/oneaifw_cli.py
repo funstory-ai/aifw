@@ -50,6 +50,20 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_translate(args: argparse.Namespace) -> int:
+    text = read_stdin_if_dash(args.text)
+    translated = local_api.translate(
+        text=text,
+        target_language=args.to,
+        api_key_file=args.api_key_file,
+        model=args.model,
+        temperature=args.temperature,
+        language=args.language or "en",
+    )
+    print(translated)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="oneaifw", description="OneAIFW CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -66,6 +80,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_analyze = sub.add_parser("analyze", help="Analyze PII entities in text")
     p_analyze.add_argument("text", help="Text to analyze or '-' to read from stdin")
     p_analyze.set_defaults(func=cmd_analyze)
+
+    p_translate = sub.add_parser("translate", help="Translate text using LiteLLM provider")
+    p_translate.add_argument("text", help="Text to translate or '-' to read from stdin")
+    p_translate.add_argument("--to", required=True, help="Target language, e.g., 'en', 'zh', 'ja'")
+    p_translate.add_argument("--model", help="LiteLLM model name (e.g., gpt-4o-mini, glm-4)")
+    p_translate.add_argument("--temperature", type=float, default=0.0)
+    p_translate.add_argument("--api-key-file", help="Path to JSON config containing openai-api-key/base-url/model for OpenAI-compatible gateway")
+    p_translate.add_argument("--language", help="Input language for Presidio analysis (default 'en')")
+    p_translate.set_defaults(func=cmd_translate)
 
     return parser
 

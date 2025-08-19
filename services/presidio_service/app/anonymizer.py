@@ -4,6 +4,7 @@ from presidio_anonymizer.entities import OperatorConfig
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import uuid
+import re
 
 @dataclass
 class AnonymizeResult:
@@ -23,10 +24,6 @@ class AnonymizerWrapper:
         # Build placeholders map and replace from end
         placeholders = {}
         new_text = text
-        for r in sorted(results, key=lambda x: x.start, reverse=True):
-            placeholder = f"__PII_{r.entity_type}_{uuid.uuid4().hex[:8]}__"
-            placeholders[placeholder] = text[r.start:r.end]
-            new_text = new_text[:r.start] + placeholder + new_text[r.end:]
         # If operators provided, run Presidio anonymizer to apply ops instead of placeholders for some types
         if operators:
             # Convert operators dict to OperatorConfig map
@@ -38,10 +35,58 @@ class AnonymizerWrapper:
             # apply anonymizer (this will use original analyzer results)
             anonymized = self.anonymizer.anonymize(text=text, analyzer_results=results, operators=op_configs)
             return {'text': anonymized.text, 'placeholdersMap': placeholders}
+        # Resolve overlapping/duplicate spans to avoid double-replacing same text.
+        # Priority: higher score, longer span, earlier start.
+        def priority_key(r: RecognizerResult):
+            return (-float(getattr(r, 'score', 0.0)), -(r.end - r.start), r.start)
+
+        def overlaps(a: RecognizerResult, b: RecognizerResult) -> bool:
+            return not (a.end <= b.start or b.end <= a.start)
+
+        selected: List[RecognizerResult] = []
+        for cand in sorted(results, key=priority_key):
+            if all(not overlaps(cand, s) for s in selected):
+                selected.append(cand)
+
+        for r in sorted(selected, key=lambda x: x.start, reverse=True):
+            placeholder = f"__PII_{r.entity_type}_{uuid.uuid4().hex[:8]}__"
+            placeholders[placeholder] = text[r.start:r.end]
+            new_text = new_text[:r.start] + placeholder + new_text[r.end:]
+        print(f"anonymized text: {new_text}")
         return {'text': new_text, 'placeholdersMap': placeholders}
 
     def restore(self, text: str, placeholders_map: Dict[str, str]):
         restored = text
-        for k, v in placeholders_map.items():
-            restored = restored.replace(k, v)
+        # Index original values by unique id suffix for robust matching
+        unique_id_to_value: Dict[str, str] = {}
+        for placeholder_token, original_value in placeholders_map.items():
+            m = re.search(r"_([0-9a-fA-F]{8})__$", placeholder_token)
+            if m:
+                unique_id_to_value[m.group(1).lower()] = original_value
+
+        # First, try exact replacements
+        for placeholder_token, original_value in placeholders_map.items():
+            if placeholder_token in restored:
+                restored = restored.replace(placeholder_token, original_value)
+
+        # Second, handle partial/altered tokens commonly produced by LLMs
+        # (A) Original value followed by leaked uuid suffix like '...<orig>abcdef12__' -> remove suffix
+        for placeholder_token, original_value in placeholders_map.items():
+            m = re.search(r"_([0-9a-fA-F]{8})__$", placeholder_token)
+            if not m:
+                continue
+            unique_id = m.group(1)
+            pattern_a = re.escape(original_value) + re.escape(unique_id) + r"__"
+            restored = re.sub(pattern_a, original_value, restored, flags=re.IGNORECASE)
+
+
+        # (B) Placeholder variants in text: allow optional leading/trailing underscores to be missing
+        # Match tokens like '__PII_..._<id>__', 'PII_..._<id>', '_PII_..._<id>__', etc.
+        generic_pattern = re.compile(r"_?_{0,1}PII[\w-]*_([0-9a-fA-F]{8})_?_{0,1}", re.IGNORECASE)
+
+        def replace_generic(m: re.Match) -> str:
+            uid = m.group(1).lower()
+            return unique_id_to_value.get(uid, m.group(0))
+
+        restored = generic_pattern.sub(replace_generic, restored)
         return restored
