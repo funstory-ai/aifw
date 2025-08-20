@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OneAIFW CLI - anonymize and restore using local in-process API.
+"""OneAIFW CLI - anonymize/restore/analyze/call using local in-process API.
 
 Usage examples:
   python -m cli.oneaifw_cli anonymize --text "My email is test@example.com"
@@ -50,17 +50,16 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_translate(args: argparse.Namespace) -> int:
+def cmd_call(args: argparse.Namespace) -> int:
     text = read_stdin_if_dash(args.text)
-    translated = local_api.translate(
+    output = local_api.call(
         text=text,
-        target_language=args.to,
         api_key_file=args.api_key_file,
         model=args.model,
         temperature=args.temperature,
         language=args.language or "en",
     )
-    print(translated)
+    print(output)
     return 0
 
 
@@ -81,14 +80,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_analyze.add_argument("text", help="Text to analyze or '-' to read from stdin")
     p_analyze.set_defaults(func=cmd_analyze)
 
-    p_translate = sub.add_parser("translate", help="Translate text using LiteLLM provider")
-    p_translate.add_argument("text", help="Text to translate or '-' to read from stdin")
-    p_translate.add_argument("--to", required=True, help="Target language, e.g., 'en', 'zh', 'ja'")
-    p_translate.add_argument("--model", help="LiteLLM model name (e.g., gpt-4o-mini, glm-4)")
-    p_translate.add_argument("--temperature", type=float, default=0.0)
-    p_translate.add_argument("--api-key-file", help="Path to JSON config containing openai-api-key/base-url/model for OpenAI-compatible gateway")
-    p_translate.add_argument("--language", help="Input language for Presidio analysis (default 'en')")
-    p_translate.set_defaults(func=cmd_translate)
+    p_call = sub.add_parser("call", help="Call LLM with anonymize→LLM→restore")
+    p_call.add_argument("text", help="Text to send or '-' to read from stdin")
+    p_call.add_argument("--model", help="LiteLLM model name (e.g., gpt-4o-mini, glm-4)")
+    p_call.add_argument("--temperature", type=float, default=0.0)
+    p_call.add_argument("--api-key-file", help="Path to JSON config containing openai-api-key/base-url/model for OpenAI-compatible gateway")
+    p_call.add_argument("--language", help="Input language for Presidio analysis (default 'en')")
+    p_call.set_defaults(func=cmd_call)
 
     return parser
 

@@ -4,23 +4,20 @@ import json
 import importlib
 
 
-class Translator:
-    """LLM-based translator using LiteLLM.
+class LLMClient:
+    """LiteLLM-based generic LLM caller.
 
-    Requires provider API key(s) via environment variables as per LiteLLM docs
-    (e.g., OPENAI_API_KEY for OpenAI models). The `model` parameter selects the
-    provider/model, e.g., "gpt-4o-mini", "openrouter/anthropic/claude-3.5-sonnet",
-    etc.
+    Requires provider API key(s) via environment variables as per LiteLLM docs.
+    The `model` parameter selects the provider/model (e.g., "gpt-4o-mini", "glm-4").
+    For OpenAI-compatible gateways (e.g., Zhipu), configure OPENAI_API_KEY + OPENAI_API_BASE.
     """
 
     def __init__(self, default_model: str = "gpt-4o-mini"):
         self.default_model = default_model
 
-    def translate(
+    def call(
         self,
         text: str,
-        target_language: str,
-        source_language: Optional[str] = None,
         model: Optional[str] = None,
         temperature: float = 0.0,
     ) -> str:
@@ -40,27 +37,7 @@ class Translator:
             if provider_prefix.lower() in {"zhipuai", "glm", "openai"} and maybe_model:
                 chosen_model = maybe_model
 
-        # Put all instructions in the system message so the user-provided text remains unchanged
-        # if source_language:
-        #     sys_prompt = (
-        #         f"You are a professional translation engine. Translate the user's next message "
-        #         f"from {source_language} to {target_language}. Do not add explanations. "
-        #         f"Preserve any tokens that look like placeholders (e.g., __PII_...__)."
-        #     )
-        # else:
-        #     sys_prompt = (
-        #         f"You are a professional translation engine. Translate the user's next message "
-        #         f"to {target_language}. Do not add explanations. "
-        #         f"Preserve any tokens that look like placeholders (e.g., __PII_...__)."
-        #     )
-        prefix_prompt = f"Translate the following text to {target_language}: "
-        user_prompt = prefix_prompt + text
-
-
-        # Ensure OpenAI-compatible provider path for custom api_base endpoints (e.g., ZhipuAI OpenAI-compatible)
-        provider_kwargs = {
-            "custom_llm_provider": "openai",
-        }
+        provider_kwargs = {"custom_llm_provider": "openai"}
         api_base = os.environ.get("OPENAI_API_BASE")
         api_key = os.environ.get("OPENAI_API_KEY")
         if api_base:
@@ -71,8 +48,7 @@ class Translator:
         resp = litellm.completion(
             model=chosen_model,
             messages=[
-                #{"role": "system", "content": sys_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": text},
             ],
             temperature=temperature,
             **provider_kwargs,
@@ -88,14 +64,14 @@ class Translator:
 def load_llm_api_config(file_path: str) -> Dict[str, Any]:
     """Load LLM config for LiteLLM from a JSON file.
 
-    Expected fields (hyphen or underscore both supported):
+    Supported keys (hyphen or underscore are both accepted):
       - openai-api-key / openai_api_key
       - openai-model   / openai_model
       - openai-base-url / openai_base_url (OpenAI-compatible base URL)
 
-    Effects:
-      - Sets OPENAI_API_KEY and OPENAI_API_BASE environment variables for LiteLLM
-      - Returns a dict containing { 'model': <model or None> }
+    Side effects:
+      - Sets OPENAI_API_KEY and OPENAI_API_BASE
+      - Returns dict { 'model': <model or None> }
     """
     with open(file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -110,13 +86,10 @@ def load_llm_api_config(file_path: str) -> Dict[str, Any]:
     model = get_any('openai-model', 'openai_model')
     base_url = get_any('openai-base-url', 'openai_base_url')
 
-    if api_key:
-        os.environ['OPENAI_API_KEY'] = api_key
-    else:
+    if not api_key:
         raise ValueError("openai-api-key not found in config file")
-
+    os.environ['OPENAI_API_KEY'] = api_key
     if base_url:
-        # LiteLLM respects OPENAI_API_BASE for OpenAI-compatible endpoints
         os.environ['OPENAI_API_BASE'] = base_url
 
     return {'model': model}

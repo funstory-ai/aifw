@@ -1,63 +1,43 @@
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
-from typing import Dict, Any, Optional
-from .analyzer import AnalyzerWrapper
-from .anonymizer import AnonymizerWrapper
+from typing import Optional
+from .one_aifw_api import OneAIFWAPI
 
-app = FastAPI(title="OneAIFW Presidio Service", version="0.1.0")
+app = FastAPI(title="OneAIFW Service", version="0.2.0")
 
-# Instantiate (will load spaCy model if available; otherwise fall back)
-analyzer = AnalyzerWrapper()
-anonymizer = AnonymizerWrapper(analyzer.engine)
-
-API_KEY = None  # set via environment variable in Docker or runtime if desired
+api = OneAIFWAPI()
+API_KEY = None  # set via env if desired
 
 
-class AnalyzeIn(BaseModel):
-    text: str
-    language: Optional[str] = "en"
-
-
-class AnonymizeIn(BaseModel):
-    text: str
-    language: Optional[str] = "en"
-    operators: Optional[Dict[str, Dict[str, Any]]] = None
-
-
-class RestoreIn(BaseModel):
-    text: str
-    placeholdersMap: Dict[str, str]
+class CallIn(BaseModel):
+	text: str
+	language: Optional[str] = "en"
+	apiKeyFile: Optional[str] = None
+	model: Optional[str] = None
+	temperature: Optional[float] = 0.0
 
 
 def check_api_key(x_api_key: Optional[str] = Header(None)):
-    if API_KEY is None:
-        return True
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return True
+	if API_KEY is None:
+		return True
+	if x_api_key != API_KEY:
+		raise HTTPException(status_code=401, detail="Unauthorized")
+	return True
 
 
 @app.get("/api/health")
-def health():
-    return {"status": "ok"}
+async def health():
+	return {"status": "ok"}
 
 
-@app.post("/api/analyze")
-def api_analyze(inp: AnalyzeIn, x_api_key: Optional[str] = Header(None)):
-    check_api_key(x_api_key)
-    items = analyzer.analyze(inp.text, language=inp.language)
-    return {"items": [i.__dict__ for i in items]}
-
-
-@app.post("/api/anonymize")
-def api_anonymize(inp: AnonymizeIn, x_api_key: Optional[str] = Header(None)):
-    check_api_key(x_api_key)
-    res = anonymizer.anonymize(inp.text, operators=inp.operators, language=inp.language)
-    return res
-
-
-@app.post("/api/restore")
-def api_restore(inp: RestoreIn, x_api_key: Optional[str] = Header(None)):
-    check_api_key(x_api_key)
-    restored = anonymizer.restore(inp.text, inp.placeholdersMap)
-    return {"text": restored}
+@app.post("/api/call")
+async def api_call(inp: CallIn, x_api_key: Optional[str] = Header(None)):
+	check_api_key(x_api_key)
+	out = api.call(
+		text=inp.text,
+		api_key_file=inp.apiKeyFile,
+		model=inp.model,
+		temperature=inp.temperature or 0.0,
+		language=inp.language or "en",
+	)
+	return {"text": out}
