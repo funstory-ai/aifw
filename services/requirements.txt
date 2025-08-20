@@ -6,3 +6,5 @@ pydantic>=1.10.0
 python-multipart>=0.0.5
 socksio>=1.0.0
 litellm>=1.45.0
+spacy-langdetect>=0.1.2
+langdetect>=1.0.9

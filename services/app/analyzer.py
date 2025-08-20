@@ -4,6 +4,9 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 from typing import List
 from dataclasses import dataclass
 import logging
+from spacy.language import Language
+from langdetect import detect as langdetect_detect
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +62,60 @@ class AnalyzerWrapper:
         for r in _custom_recognizers():
             registry.add_recognizer(r)
         self.engine = AnalyzerEngine(nlp_engine=nlp_engine, registry=registry)
+        # Keep a reference to spaCy model (optional), but prefer lightweight detector
+        try:
+            self._spacy = nlp_engine.nlps.get('en')
+        except Exception:
+            self._spacy = None
 
     def analyze(self, text: str, language: str = 'en') -> List[EntitySpan]:
         results = self.engine.analyze(text=text, language=language)
         return [EntitySpan(r.entity_type, r.start, r.end, r.score,
                            text[r.start:r.end])
                 for r in results]
+
+    def detect_language(self, text: str) -> str:
+        # Prefer lightweight detector to avoid running full spaCy pipeline
+        if not text or not text.strip():
+            return 'en'
+
+        def _normalize_lang(code: str) -> str:
+            code = (code or '').lower()
+            if code.startswith('zh'):
+                return 'zh'
+            return code or 'en'
+
+        def _extract_candidate(t: str) -> str:
+            # If there's an instruction prefix (e.g., Chinese/English prompt) followed by ':' or '：',
+            # detect on the substring after the first colon to better reflect the content language.
+            idx = -1
+            for ch in [':', '：']:
+                j = t.find(ch)
+                if j != -1 and (idx == -1 or j < idx):
+                    idx = j
+            if 0 < idx < 80:
+                prefix = t[:idx]
+                if any(k in prefix for k in ['翻译', '如下', '请', '将', 'translate', 'following']):
+                    return t[idx+1:].strip()
+            return t
+
+        candidate = _extract_candidate(text)
+
+        # Heuristic based on character class counts
+        cjk_count = len(re.findall(r'[\u4e00-\u9fff]', candidate))
+        latin_count = len(re.findall(r'[A-Za-z]', candidate))
+        signal = cjk_count + latin_count
+        if signal >= 10 and (cjk_count > 0 and latin_count > 0):
+            c_ratio = cjk_count / signal
+            l_ratio = latin_count / signal
+            if l_ratio >= 0.6:
+                return 'en'
+            if c_ratio >= 0.6:
+                return 'zh'
+            # If mixed without clear dominance, fall back to detector on candidate
+
+        try:
+            code = langdetect_detect(candidate)
+            return _normalize_lang(code)
+        except Exception:
+            return 'en'

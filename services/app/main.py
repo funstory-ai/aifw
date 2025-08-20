@@ -11,7 +11,6 @@ API_KEY = None  # set via env if desired
 
 class CallIn(BaseModel):
 	text: str
-	language: Optional[str] = "en"
 	apiKeyFile: Optional[str] = None
 	model: Optional[str] = None
 	temperature: Optional[float] = 0.0
@@ -38,6 +37,5 @@ async def api_call(inp: CallIn, x_api_key: Optional[str] = Header(None)):
 		api_key_file=inp.apiKeyFile,
 		model=inp.model,
 		temperature=inp.temperature or 0.0,
-		language=inp.language or "en",
 	)
 	return {"text": out}

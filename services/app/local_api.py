@@ -17,12 +17,10 @@ def call(
         api_key_file: Optional[str] = None,
         model: Optional[str] = None,
         temperature: float = 0.0,
-        language: str = "en",
         ) -> str:
     return api.call(
             text=text,
             api_key_file=api_key_file,
             model=model,
             temperature=temperature,
-            language=language,
             )
