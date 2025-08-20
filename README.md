@@ -9,7 +9,7 @@ This repository provides a local Presidio-based service (OneAIFW) with:
 
 ## Quickstart - Service
 ```bash
-cd services/presidio_service
+cd services
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
@@ -17,13 +17,13 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
 Or with Docker:
 ```bash
-cd services/presidio_service
+cd services
 docker build -t oneaifw-presidio-service .
 docker run -p 8000:8000 -e API_KEY=changeme-please oneaifw-presidio-service
 ```
 
 ## Local API (in-process)
-UI and CLI now call a local in-process API (`services/presidio_service/app/local_api.py`) directly, without HTTP.
+UI and CLI now call a local in-process API (`services/app/local_api.py`) directly, without HTTP.
 
 ## UI
 ```bash

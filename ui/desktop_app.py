@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # Use local in-process API to avoid HTTP dependency
-from services.presidio_service.app import local_api
+from services.app import local_api
 
 def do_anonymize():
     txt = txt_in.get("1.0", tk.END).strip()

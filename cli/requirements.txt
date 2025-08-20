@@ -1,3 +1,3 @@
--r ../services/presidio_service/requirements.txt
+-r ../services/requirements.txt
 
 
