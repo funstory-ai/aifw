@@ -14,7 +14,7 @@ class OneAIFWAPI:
 
     def __init__(self):
         self._analyzer_wrapper = AnalyzerWrapper()
-        self._anonymizer_wrapper = AnonymizerWrapper(self._analyzer_wrapper.engine)
+        self._anonymizer_wrapper = AnonymizerWrapper(self._analyzer_wrapper)
         self._llm = LLMClient()
 
     # Internal helpers (not for external exposure)
