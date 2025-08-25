@@ -2,6 +2,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from .one_aifw_api import OneAIFWAPI
+import os
 
 app = FastAPI(title="OneAIFW Service", version="0.2.0")
 
@@ -32,9 +33,11 @@ async def health():
 @app.post("/api/call")
 async def api_call(inp: CallIn, x_api_key: Optional[str] = Header(None)):
 	check_api_key(x_api_key)
+	default_key_file = os.environ.get("ONEAIFW_DEFAULT_API_KEY_FILE")
+	chosen_key_file = inp.apiKeyFile or default_key_file
 	out = api.call(
 		text=inp.text,
-		api_key_file=inp.apiKeyFile,
+		api_key_file=chosen_key_file,
 		model=inp.model,
 		temperature=inp.temperature or 0.0,
 	)

@@ -12,12 +12,6 @@ import json
 import os
 
 logger = logging.getLogger(__name__)
-# Ensure module logger prints to terminal for debugging
-if not logger.handlers:
-    _handler = logging.StreamHandler(sys.stdout)
-    _handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    logger.addHandler(_handler)
-logger.setLevel(logging.DEBUG)
 
 
 @dataclass
