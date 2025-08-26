@@ -155,12 +155,22 @@ class AnalyzerWrapper:
     def __init__(self):
         cfg = _try_spacy_configuration()
         logger.debug('AnalyzerWrapper: spaCy configuration: %s', cfg)
-        provider = NlpEngineProvider(nlp_configuration=cfg)
-        nlp_engine = provider.create_engine()
+        # Temporarily suppress Presidio's internal warnings during engine creation
+        _presidio_logger_names = ['presidio-analyzer']
+        _saved_levels_engine = {}
+        try:
+            for _n in _presidio_logger_names:
+                _lg = logging.getLogger(_n)
+                # Suppress warning when user requested INFO logging level
+                if logger.getEffectiveLevel() == logging.INFO:
+                    _saved_levels_engine[_n] = _lg.level
+                    _lg.setLevel(logging.ERROR)
+            provider = NlpEngineProvider(nlp_configuration=cfg)
+            nlp_engine = provider.create_engine()
+        finally:
+            for _n, _lvl in _saved_levels_engine.items():
+                logging.getLogger(_n).setLevel(_lvl)
         logger.debug('AnalyzerWrapper: nlp_engine: %s', nlp_engine)
-        registry = RecognizerRegistry()
-        registry.load_predefined_recognizers(nlp_engine=nlp_engine)
-        self.engine = AnalyzerEngine(nlp_engine=nlp_engine, registry=registry)
         # Track available languages in the NLP engine robustly
         try:
             if hasattr(nlp_engine, 'nlps') and hasattr(nlp_engine.nlps, 'keys'):
@@ -174,7 +184,32 @@ class AnalyzerWrapper:
             logger.debug('AnalyzerWrapper: available_langs: %s', self.available_langs)
         except Exception as e:
             self.available_langs = {'en'}
-            logger.warning('AnalyzerWrapper: failed to get available_langs: %s', e)
+            logger.warning('AnalyzerWrapper: failed to get available_langs: %s, using default en', e)
+        # Initialize registry matching analyzer_engine supported languages
+        registry = RecognizerRegistry()
+        # Temporarily suppress Presidio's internal warnings during recognizer loading
+        _presidio_logger_names = ['presidio-analyzer']
+        _saved_levels = {}
+        try:
+            for _n in _presidio_logger_names:
+                _lg = logging.getLogger(_n)
+                # Suppress warning when user requested INFO logging level
+                if logger.getEffectiveLevel() == logging.INFO:
+                    _saved_levels[_n] = _lg.level
+                    _lg.setLevel(logging.ERROR)
+            registry.load_predefined_recognizers(nlp_engine=nlp_engine)
+        finally:
+            for _n, _lvl in _saved_levels.items():
+                logging.getLogger(_n).setLevel(_lvl)
+        # Create engine then align registry languages to engine.supported_languages to satisfy Presidio checks
+        self.engine = AnalyzerEngine(nlp_engine=nlp_engine, registry=registry)
+        try:
+            engine_langs = getattr(self.engine, 'supported_languages', None) or ['en']
+            # If registry exposes supported_languages, align it
+            if hasattr(registry, 'supported_languages'):
+                registry.supported_languages = engine_langs
+        except Exception:
+            pass
         # Add per-language custom recognizers so they are selected in each language bucket
         for lang in sorted(self.available_langs):
             for rec in _build_per_language_patterns(lang):
@@ -197,7 +232,7 @@ class AnalyzerWrapper:
             else:
                 logger.warning("Entity filters config not found at %s; using defaults.", cfg_path)
         except Exception as e:
-            logger.warning('Failed to load entity filters: %s', e)
+            logger.warning('Failed to load entity filters: %s, using defaults', e)
         return {}, {}
 
     # If there's an instruction prefix (e.g., Chinese/English prompt) followed by ':' or '：',
@@ -225,7 +260,7 @@ class AnalyzerWrapper:
             # Run full Presidio pass
             pres_results = self.engine.analyze(text=text, language=engine_lang, entities=None)
         except Exception as e:
-            logger.debug("Presidio analyze failed: %s", e)
+            logger.warning("Presidio analyze failed: %s, set pres_results=[]", e)
             pres_results = []
         logger.debug("Analyzer.analyze pres_results=%s", [(r.entity_type, r.start, r.end, getattr(r,'score',None)) for r in pres_results])
         # Drop any entities detected in instruction prefix (before first colon with keywords)

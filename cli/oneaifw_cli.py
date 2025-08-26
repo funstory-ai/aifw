@@ -44,6 +44,12 @@ def resolve_state_dir(provided: str | None) -> str:
     return base
 
 
+def _parse_scopes(scopes: str | None) -> set[str]:
+    raw = (scopes or "app,uvicorn").strip()
+    parts = [p.strip().lower() for p in raw.split(',') if p.strip()]
+    return set(parts or ["app", "uvicorn"])
+
+
 def _pidfile_candidates(port: int, state_dir_arg: str | None) -> list[str]:
     bases = []
     seen = set()
@@ -110,6 +116,7 @@ def _write_pidfile_with_fallbacks(preferred_dir: str, port: int, pid: int) -> st
 def cmd_direct_call(args: argparse.Namespace) -> int:
     # Configure logging destination and level for in-process run
     level = getattr(logging, (args.log_level or 'INFO').upper(), logging.INFO)
+    scopes = _parse_scopes(getattr(args, 'log_scopes', None))
     # Delay import so we can reconfigure module loggers after import
     from services.app import local_api  # noqa: WPS433
     # Reset module loggers to avoid duplicate handlers
@@ -124,6 +131,20 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
             lg.removeHandler(h)
         lg.setLevel(level)
         lg.propagate = False
+    # Third-party loggers default no more verbose than chosen level, min WARNING
+    default_third_level = level if level >= logging.WARNING else logging.WARNING
+    for name in [
+        'presidio', 'presidio-analyzer', 'presidio-anonymizer',
+        'LiteLLM', 'httpx',
+    ]:
+        if name.startswith('presidio'):
+            set_level = level if ('presidio' in scopes or 'all' in scopes) else default_third_level
+        elif name == 'LiteLLM' or name == 'httpx':
+            set_level = level if ('litellm' in scopes or 'all' in scopes) else default_third_level
+        else:
+            set_level = default_third_level
+        logging.getLogger(name).setLevel(set_level)
+
     handler: logging.Handler
     if args.log_dest == 'file':
         state_dir = resolve_state_dir(getattr(args, 'state_dir', None))
@@ -181,6 +202,14 @@ def cmd_launch(args: argparse.Namespace) -> int:
     state_dir = resolve_state_dir(getattr(args, 'state_dir', None))
     logcfg_path = os.path.join(state_dir, f"aifw-uvicorn-{port}.json")
     try:
+        scopes = _parse_scopes(getattr(args, 'log_scopes', None))
+        app_level = log_level.upper()
+        # Default third-party not more verbose than app level, min WARNING
+        default_third = 'WARNING'
+        if app_level in ('ERROR', 'CRITICAL', 'FATAL'):
+            default_third = 'ERROR'
+        pres_level = app_level if ('presidio' in scopes or 'all' in scopes) else default_third
+        llm_level = app_level if ('litellm' in scopes or 'all' in scopes) else default_third
         logcfg = {
             "version": 1,
             "disable_existing_loggers": False,
@@ -203,6 +232,17 @@ def cmd_launch(args: argparse.Namespace) -> int:
                 "uvicorn": {"level": log_level.upper(), "handlers": ["default"], "propagate": False},
                 "uvicorn.error": {"level": log_level.upper(), "handlers": ["default"], "propagate": False},
                 "uvicorn.access": {"level": log_level.upper(), "handlers": ["default"], "propagate": False},
+                # App scopes
+                "services.app": {"level": app_level, "handlers": ["default"], "propagate": False},
+                "services.app.analyzer": {"level": app_level, "handlers": ["default"], "propagate": False},
+                "services.app.anonymizer": {"level": app_level, "handlers": ["default"], "propagate": False},
+                "services.app.llm_client": {"level": app_level, "handlers": ["default"], "propagate": False},
+                # Third-party
+                "presidio": {"level": pres_level, "handlers": ["default"], "propagate": False},
+                "presidio-analyzer": {"level": pres_level, "handlers": ["default"], "propagate": False},
+                "presidio-anonymizer": {"level": pres_level, "handlers": ["default"], "propagate": False},
+                "LiteLLM": {"level": llm_level, "handlers": ["default"], "propagate": False},
+                "httpx": {"level": llm_level, "handlers": ["default"], "propagate": False},
             },
         }
         with open(logcfg_path, 'w', encoding='utf-8') as f:
@@ -225,9 +265,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         pidfile = _write_pidfile_with_fallbacks(state_dir, port, proc.pid)
         time.sleep(0.3)
         print(f"aifw is running at http://localhost:{port}.")
-        if pidfile:
-            print(f"pidfile: {pidfile}")
-        else:
+        if not pidfile:
             print("warning: failed to write pidfile (try --state-dir ~/.aifw or set AIFW_STATE_DIR)")
         return 0
     else:
@@ -249,9 +287,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         time.sleep(0.6)
         print(f"aifw is running at http://localhost:{port}.")
         print(f"logs: {log_file}")
-        if pidfile:
-            print(f"pidfile: {pidfile}")
-        else:
+        if not pidfile:
             print("warning: failed to write pidfile (try --state-dir ~/.aifw or set AIFW_STATE_DIR)")
         return 0
 
@@ -364,6 +400,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_direct.add_argument("--log-dest", choices=["stdout","file"], default="stdout")
     p_direct.add_argument("--log-file", help="Log file path if --log-dest=file")
     p_direct.add_argument("--log-level", choices=["DEBUG","INFO","WARNING","ERROR"], default="INFO")
+    p_direct.add_argument("--log-scopes", help="Comma-separated: app,uvicorn,presidio,litellm,all (default app,uvicorn)")
     p_direct.set_defaults(func=cmd_direct_call)
 
     # launch: start FastAPI backend
@@ -374,6 +411,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_launch.add_argument("--log-dest", choices=["stdout","file"], default="stdout")
     p_launch.add_argument("--log-file", help="Log file path if --log-dest=file")
     p_launch.add_argument("--log-level", choices=["DEBUG","INFO","WARNING","ERROR"], default="INFO")
+    p_launch.add_argument("--log-scopes", help="Comma-separated: app,uvicorn,presidio,litellm,all (default app,uvicorn)")
     p_launch.set_defaults(func=cmd_launch)
 
     p_stop = sub.add_parser("stop", help="Stop HTTP service started by launch")
