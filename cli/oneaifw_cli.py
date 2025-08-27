@@ -25,7 +25,9 @@ import urllib.request
 import urllib.error
 import signal
 import logging
+from datetime import datetime
 
+from services.app.aifw_utils import cleanup_monthly_logs
 
 def read_stdin_if_dash(value: str) -> str:
     if value == "-":
@@ -33,8 +35,8 @@ def read_stdin_if_dash(value: str) -> str:
     return value
 
 
-def resolve_state_dir(provided: str | None) -> str:
-    base = provided or os.environ.get("AIFW_STATE_DIR")
+def resolve_work_dir(provided: str | None) -> str:
+    base = provided or os.environ.get("AIFW_WORK_DIR")
     if not base:
         base = os.path.expanduser("~/.aifw")
     try:
@@ -50,7 +52,72 @@ def _parse_scopes(scopes: str | None) -> set[str]:
     return set(parts or ["app", "uvicorn"])
 
 
-def _pidfile_candidates(port: int, state_dir_arg: str | None) -> list[str]:
+def _candidate_config_paths(provided: str | None, work_dir_arg: str | None) -> list[str]:
+    paths: list[str] = []
+    def add(p: str | None):
+        if not p:
+            return
+        p = os.path.abspath(os.path.expanduser(p))
+        if p not in paths:
+            paths.append(p)
+    add(provided)
+    add(os.environ.get("AIFW_CONFIG"))
+    wd = resolve_work_dir(work_dir_arg)
+    add(os.path.join(wd, "aifw.yaml"))
+    xdg = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    add(os.path.join(xdg, "aifw", "aifw.yaml"))
+    add(os.path.expanduser("~/.aifw/aifw.yaml"))
+    add("/etc/aifw/aifw.yaml")
+    return paths
+
+
+def _load_config(config_path: str | None) -> dict:
+    if not config_path:
+        return {}
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+        try:
+            return json.loads(text)
+        except Exception:
+            try:
+                import yaml  # type: ignore
+                return yaml.safe_load(text) or {}
+            except Exception:
+                return {}
+    except Exception:
+        return {}
+
+
+def _get_effective(arg_val, cfg_val, default_val=None):
+    return arg_val if arg_val not in (None, "") else (cfg_val if cfg_val not in (None, "") else default_val)
+
+
+def _find_and_load_config(config_arg: str | None, work_dir_arg: str | None) -> tuple[dict, str | None]:
+    cfg_path = None
+    for p in _candidate_config_paths(config_arg, work_dir_arg):
+        if os.path.exists(p):
+            cfg_path = p
+            break
+    return _load_config(cfg_path), cfg_path
+
+
+def _monthly_log_path(base_path: str, now: datetime | None = None) -> str:
+    """Append -YYYY-MM before extension (or at end) for monthly logs."""
+    now = now or datetime.now()
+    ym = now.strftime("%Y-%m")
+    base_path = os.path.expanduser(base_path)
+    base_dir = os.path.dirname(base_path)
+    file_name = os.path.basename(base_path)
+    if file_name.endswith('.log'):
+        stem = file_name[:-4]
+        rotated = f"{stem}-{ym}.log"
+    else:
+        rotated = f"{file_name}-{ym}.log"
+    return os.path.abspath(os.path.join(base_dir, rotated))
+
+
+def _pidfile_candidates(port: int, work_dir_arg: str | None) -> list[str]:
     bases = []
     seen = set()
 
@@ -64,18 +131,18 @@ def _pidfile_candidates(port: int, state_dir_arg: str | None) -> list[str]:
             bases.append(norm)
 
     # 1) user-provided/arg directory (resolved to ensure it exists)
-    if state_dir_arg:
-        _add(resolve_state_dir(state_dir_arg))
+    if work_dir_arg:
+        _add(resolve_work_dir(work_dir_arg))
     # 2) environment directory
-    _add(os.environ.get("AIFW_STATE_DIR"))
+    _add(os.environ.get("AIFW_WORK_DIR"))
     # 3) default home directory
     _add("~/.aifw")
 
     return [os.path.join(b, f"aifw-server-{port}.pid") for b in bases]
 
 
-def _find_existing_pidfile(port: int, state_dir_arg: str | None) -> str | None:
-    for pf in _pidfile_candidates(port, state_dir_arg):
+def _find_existing_pidfile(port: int, work_dir_arg: str | None) -> str | None:
+    for pf in _pidfile_candidates(port, work_dir_arg):
         if os.path.exists(pf):
             return pf
     return None
@@ -114,9 +181,11 @@ def _write_pidfile_with_fallbacks(preferred_dir: str, port: int, pid: int) -> st
 
 
 def cmd_direct_call(args: argparse.Namespace) -> int:
+    # Load config (if available)
+    cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
     # Configure logging destination and level for in-process run
-    level = getattr(logging, (args.log_level or 'INFO').upper(), logging.INFO)
-    scopes = _parse_scopes(getattr(args, 'log_scopes', None))
+    level = getattr(logging, (_get_effective(getattr(args, 'log_level', None), cfg.get('log_level'), 'INFO') or 'INFO').upper(), logging.INFO)
+    scopes = _parse_scopes(_get_effective(getattr(args, 'log_scopes', None), cfg.get('log_scopes'), None))
     # Delay import so we can reconfigure module loggers after import
     from services.app import local_api  # noqa: WPS433
     # Reset module loggers to avoid duplicate handlers
@@ -146,23 +215,32 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
         logging.getLogger(name).setLevel(set_level)
 
     handler: logging.Handler
-    if args.log_dest == 'file':
-        state_dir = resolve_state_dir(getattr(args, 'state_dir', None))
-        log_file = args.log_file or os.path.join(state_dir, 'aifw-direct.log')
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        handler = logging.FileHandler(log_file)
+    log_dest = _get_effective(getattr(args, 'log_dest', None), cfg.get('log_dest'), 'stdout')
+    if log_dest == 'file':
+        work_dir = resolve_work_dir(getattr(args, 'work_dir', None))
+        base_log = _get_effective(getattr(args, 'log_file', None), cfg.get('log_file'), os.path.join(work_dir, 'aifw-direct.log'))
+        log_file = _monthly_log_path(base_log)
+        try:
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            handler = logging.FileHandler(log_file)
+            # Cleanup old logs based on config (months)
+            months_to_keep = int(_get_effective(None, cfg.get('log_months_to_keep'), 6) or 6)
+            cleanup_monthly_logs(base_log, months_to_keep)
+        except Exception:
+            handler = logging.StreamHandler(sys.stdout)
     else:
         handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
     logging.getLogger('services.app').addHandler(handler)
 
     text = read_stdin_if_dash(args.text)
-    api_key_file = os.path.abspath(args.api_key_file) if args.api_key_file else None
+    api_key_file = _get_effective(getattr(args, 'api_key_file', None), cfg.get('api_key_file'), None)
+    api_key_file = os.path.abspath(api_key_file) if api_key_file else None
     output = local_api.call(
         text=text,
         api_key_file=api_key_file,
-        model=args.model,
-        temperature=args.temperature,
+        model=_get_effective(getattr(args, 'model', None), cfg.get('model'), None),
+        temperature=float(_get_effective(getattr(args, 'temperature', None), cfg.get('temperature'), 0.0) or 0.0),
     )
     print(output)
     return 0
@@ -170,14 +248,16 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
 
 def cmd_launch(args: argparse.Namespace) -> int:
     # Launch FastAPI service using uvicorn in background
-    port = args.port
+    # Load config
+    cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
+    port = int(_get_effective(getattr(args, 'port', None), cfg.get('port'), args.port or 8844))
     env = os.environ.copy()
 
     # Enforce global single instance per port: if running, report and exit
     if _server_alive_on_port(port):
         print(f"aifw is already running at http://localhost:{port} (health check passed).")
         return 1
-    existing_pf = _find_existing_pidfile(port, getattr(args, 'state_dir', None))
+    existing_pf = _find_existing_pidfile(port, getattr(args, 'work_dir', None))
     if existing_pf:
         try:
             with open(existing_pf, 'r') as f:
@@ -190,19 +270,20 @@ def cmd_launch(args: argparse.Namespace) -> int:
             # stale or unreadable pidfile; ignore and continue to launch
             pass
 
-    if args.api_key_file:
-        env["ONEAIFW_DEFAULT_API_KEY_FILE"] = os.path.abspath(args.api_key_file)
+    api_key_file = _get_effective(getattr(args, 'api_key_file', None), cfg.get('api_key_file'), None)
+    if api_key_file:
+        env["ONEAIFW_DEFAULT_API_KEY_FILE"] = os.path.abspath(api_key_file)
     # Ensure backend package importable
     env["PYTHONPATH"] = (
         (PROJECT_ROOT + (os.pathsep + env.get("PYTHONPATH", "") if env.get("PYTHONPATH") else ""))
     )
     # Import path for app: services.app.main:app
-    log_level = (args.log_level or 'info').lower()
+    log_level = (_get_effective(getattr(args, 'log_level', None), cfg.get('log_level'), 'info') or 'info').lower()
     # Build uvicorn log-config to include root logger so app logs are captured
-    state_dir = resolve_state_dir(getattr(args, 'state_dir', None))
-    logcfg_path = os.path.join(state_dir, f"aifw-uvicorn-{port}.json")
+    work_dir = resolve_work_dir(getattr(args, 'work_dir', None))
+    logcfg_path = os.path.join(work_dir, f"aifw-uvicorn-{port}.json")
     try:
-        scopes = _parse_scopes(getattr(args, 'log_scopes', None))
+        scopes = _parse_scopes(_get_effective(getattr(args, 'log_scopes', None), cfg.get('log_scopes'), None))
         app_level = log_level.upper()
         # Default third-party not more verbose than app level, min WARNING
         default_third = 'WARNING'
@@ -251,7 +332,13 @@ def cmd_launch(args: argparse.Namespace) -> int:
     except Exception:
         log_config_arg = ""
     cmd = f"{sys.executable} -m uvicorn services.app.main:app --host 127.0.0.1 --port {port} --log-level {log_level}{log_config_arg}"
-    if args.log_dest == 'stdout':
+    log_dest = _get_effective(getattr(args, 'log_dest', None), cfg.get('log_dest'), 'file')
+    # Prepare server-side env for monthly cleanup BEFORE launch
+    base_log = _get_effective(getattr(args, 'log_file', None), cfg.get('log_file'), os.path.join(work_dir, f"aifw-server-{port}.log"))
+    months_to_keep = int(_get_effective(None, cfg.get('log_months_to_keep'), 6) or 6)
+    env["AIFW_LOG_FILE"] = os.path.abspath(os.path.expanduser(base_log))
+    env["AIFW_LOG_MONTHS_TO_KEEP"] = str(months_to_keep)
+    if log_dest == 'stdout':
         # Background process, inherit stdout/stderr so logs appear in terminal, but CLI exits
         proc = subprocess.Popen(
             shlex.split(cmd),
@@ -262,44 +349,60 @@ def cmd_launch(args: argparse.Namespace) -> int:
             close_fds=False,
             cwd=PROJECT_ROOT,
         )
-        pidfile = _write_pidfile_with_fallbacks(state_dir, port, proc.pid)
+        pidfile = _write_pidfile_with_fallbacks(work_dir, port, proc.pid)
         time.sleep(0.3)
         print(f"aifw is running at http://localhost:{port}.")
         if not pidfile:
-            print("warning: failed to write pidfile (try --state-dir ~/.aifw or set AIFW_STATE_DIR)")
+            print("warning: failed to write pidfile (try --work-dir ~/.aifw or set AIFW_WORK_DIR)")
         return 0
     else:
         # Background to file
-        log_file = args.log_file or os.path.join(state_dir, f"aifw-server-{port}.log")
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        log_fh = open(log_file, 'ab', buffering=0)
-        proc = subprocess.Popen(
-            shlex.split(cmd),
-            env=env,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            preexec_fn=os.setsid,
-            close_fds=True,
-            cwd=PROJECT_ROOT,
-        )
-        # Write pidfile under state_dir (with fallback)
-        pidfile = _write_pidfile_with_fallbacks(state_dir, port, proc.pid)
+        log_file = _monthly_log_path(base_log)
+        try:
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            log_fh = open(log_file, 'ab', buffering=0)
+            proc = subprocess.Popen(
+                shlex.split(cmd),
+                env=env,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                preexec_fn=os.setsid,
+                close_fds=True,
+                cwd=PROJECT_ROOT,
+            )
+            # Cleanup old logs
+            cleanup_monthly_logs(base_log, months_to_keep)
+        except Exception:
+            # Fallback to stdout if file cannot be used
+            proc = subprocess.Popen(
+                shlex.split(cmd),
+                env=env,
+                stdout=None,
+                stderr=None,
+                preexec_fn=os.setsid,
+                close_fds=False,
+                cwd=PROJECT_ROOT,
+            )
+        # Write pidfile under work_dir (with fallback)
+        pidfile = _write_pidfile_with_fallbacks(work_dir, port, proc.pid)
         time.sleep(0.6)
         print(f"aifw is running at http://localhost:{port}.")
         print(f"logs: {log_file}")
         if not pidfile:
-            print("warning: failed to write pidfile (try --state-dir ~/.aifw or set AIFW_STATE_DIR)")
+            print("warning: failed to write pidfile (try --work-dir ~/.aifw or set AIFW_WORK_DIR)")
         return 0
 
 
 def cmd_http_call(args: argparse.Namespace) -> int:
+    # Load config
+    cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
     text = read_stdin_if_dash(args.text)
-    url = args.url.rstrip('/') + '/api/call'
+    url = (_get_effective(getattr(args, 'url', None), cfg.get('url'), 'http://localhost:8844') or 'http://localhost:8844').rstrip('/') + '/api/call'
     payload = {
         "text": text,
-        "apiKeyFile": os.path.abspath(args.api_key_file) if args.api_key_file else None,
-        "model": args.model,
-        "temperature": args.temperature,
+        "apiKeyFile": os.path.abspath(_get_effective(getattr(args, 'api_key_file', None), cfg.get('api_key_file'), None)) if _get_effective(getattr(args, 'api_key_file', None), cfg.get('api_key_file'), None) else None,
+        "model": _get_effective(getattr(args, 'model', None), cfg.get('model'), None),
+        "temperature": float(_get_effective(getattr(args, 'temperature', None), cfg.get('temperature'), 0.0) or 0.0),
     }
     data = json.dumps(payload).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
@@ -313,10 +416,26 @@ def cmd_http_call(args: argparse.Namespace) -> int:
                 print(body)
         return 0
     except urllib.error.HTTPError as e:
-        print(f"HTTP {e.code}: {e.read().decode(errors='ignore')}", file=sys.stderr)
+        try:
+            err_body = e.read().decode('utf-8', errors='ignore')
+        except Exception:
+            err_body = ''
+        reason = getattr(e, 'reason', '') or ''
+        where = getattr(e, 'url', url)
+        prefix = f"HTTP {getattr(e, 'code', '')} {reason} for {where}".strip()
+        if err_body:
+            # Try to pretty print JSON error
+            try:
+                j = json.loads(err_body)
+                print(f"{prefix}: {json.dumps(j, ensure_ascii=False)}", file=sys.stderr)
+            except Exception:
+                print(f"{prefix}: {err_body}", file=sys.stderr)
+        else:
+            print(f"{prefix}: (empty body)", file=sys.stderr)
         return 2
     except urllib.error.URLError as e:
-        print(f"Connection error: {e}", file=sys.stderr)
+        reason = getattr(e, 'reason', e)
+        print(f"Connection error: {reason}", file=sys.stderr)
         return 3
 
 
@@ -325,11 +444,12 @@ def cmd_stop(args: argparse.Namespace) -> int:
     port = args.port
     # Search for pidfile across possible locations
     candidates = []
-    if getattr(args, 'state_dir', None):
-        candidates.append(resolve_state_dir(args.state_dir))
-    env_dir = os.environ.get("AIFW_STATE_DIR")
-    if env_dir:
-        candidates.append(env_dir)
+    wd_arg = getattr(args, 'work_dir', None)
+    if wd_arg:
+        candidates.append(resolve_work_dir(wd_arg))
+    env_wd = os.environ.get("AIFW_WORK_DIR")
+    if env_wd:
+        candidates.append(env_wd)
     candidates.append(os.path.expanduser("~/.aifw"))
 
     pidfile = None
@@ -396,8 +516,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_direct.add_argument("--model", help="LiteLLM model name (e.g., gpt-4o-mini, glm-4)")
     p_direct.add_argument("--temperature", type=float, default=0.0)
     p_direct.add_argument("--api-key-file", help="Path to JSON config with openai-api-key/base-url/model")
-    p_direct.add_argument("--state-dir", help="Base dir for logs (default ~/.aifw or $AIFW_STATE_DIR)")
-    p_direct.add_argument("--log-dest", choices=["stdout","file"], default="stdout")
+    p_direct.add_argument("--config", help="Path to aifw config file (json/yaml)")
+    p_direct.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")
+    p_direct.add_argument("--state-dir", help="[deprecated] Same as --work-dir")
+    p_direct.add_argument("--log-dest", choices=["stdout","file"], default="file")
     p_direct.add_argument("--log-file", help="Log file path if --log-dest=file")
     p_direct.add_argument("--log-level", choices=["DEBUG","INFO","WARNING","ERROR"], default="INFO")
     p_direct.add_argument("--log-scopes", help="Comma-separated: app,uvicorn,presidio,litellm,all (default app,uvicorn)")
@@ -405,27 +527,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     # launch: start FastAPI backend
     p_launch = sub.add_parser("launch", help="Start HTTP service (FastAPI)")
+    p_launch.add_argument("--config", help="Path to aifw config file (json/yaml)")
     p_launch.add_argument("--api-key-file", help="Default API key file for backend (env: ONEAIFW_DEFAULT_API_KEY_FILE)")
     p_launch.add_argument("--port", type=int, default=8844)
-    p_launch.add_argument("--state-dir", help="Base dir for pid/logs (default ~/.aifw or $AIFW_STATE_DIR)")
-    p_launch.add_argument("--log-dest", choices=["stdout","file"], default="stdout")
+    p_launch.add_argument("--work-dir", help="Base dir for config/logs/pid (default ~/.aifw or $AIFW_WORK_DIR)")
+    p_launch.add_argument("--state-dir", help="[deprecated] Same as --work-dir")
+    p_launch.add_argument("--log-dest", choices=["stdout","file"], default="file")
     p_launch.add_argument("--log-file", help="Log file path if --log-dest=file")
     p_launch.add_argument("--log-level", choices=["DEBUG","INFO","WARNING","ERROR"], default="INFO")
     p_launch.add_argument("--log-scopes", help="Comma-separated: app,uvicorn,presidio,litellm,all (default app,uvicorn)")
     p_launch.set_defaults(func=cmd_launch)
 
     p_stop = sub.add_parser("stop", help="Stop HTTP service started by launch")
+    p_stop.add_argument("--config", help="Path to aifw config file (json/yaml)")
     p_stop.add_argument("--port", type=int, default=8844)
-    p_stop.add_argument("--state-dir", help="Base dir for pid/logs (default ~/.aifw or $AIFW_STATE_DIR)")
+    p_stop.add_argument("--work-dir", help="Base dir for pid/logs (default ~/.aifw or $AIFW_WORK_DIR)")
+    p_stop.add_argument("--state-dir", help="[deprecated] Same as --work-dir")
     p_stop.set_defaults(func=cmd_stop)
 
     # call: HTTP mode
     p_http = sub.add_parser("call", help="Call HTTP API /api/call")
     p_http.add_argument("text", help="Text to send or '-' to read from stdin")
-    p_http.add_argument("--url", default="http://localhost:8844", help="Service base URL")
+    p_http.add_argument("--config", help="Path to aifw config file (json/yaml)")
+    p_http.add_argument("--url", help="Service base URL")
     p_http.add_argument("--api-key-file", help="Key file path passed to backend (optional)")
     p_http.add_argument("--model", help="LiteLLM model name")
-    p_http.add_argument("--temperature", type=float, default=0.0)
+    p_http.add_argument("--temperature", type=float)
     p_http.set_defaults(func=cmd_http_call)
 
     return parser
