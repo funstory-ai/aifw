@@ -7,20 +7,34 @@ This repository provides a local Presidio-based service (OneAIFW) with:
 - Browser extension (Chrome/Edge MV3)
 - Dockerfile + docker-compose for easy local deployment
 
-## Quickstart - Service
+## Quickstart - Service (Docker)
+Build profiles for spaCy models via `--build-arg SPACY_PROFILE=...`:
+
+- minimal (default): en_core_web_sm, zh_core_web_sm, xx_ent_wiki_sm
+- fr: minimal + fr_core_news_sm
+- de: minimal + de_core_news_sm
+- ja: minimal + ja_core_news_sm
+- multi: minimal + fr/de/ja
+
 ```bash
-cd services
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+# Build minimal (default)
+docker build -t oneaifw:minimal .
+
+# Build French / German / Japanese
+docker build --build-arg SPACY_PROFILE=fr -t oneaifw:fr .
+docker build --build-arg SPACY_PROFILE=de -t oneaifw:de .
+docker build --build-arg SPACY_PROFILE=ja -t oneaifw:ja .
+
+# Build multi-language
+docker build --build-arg SPACY_PROFILE=multi -t oneaifw:multi .
+
+# Run (mount host work dir with config/logs and your api keys)
+docker run --rm -p 8844:8844 \
+  -v $HOME/.aifw:/data/aifw \
+  oneaifw:minimal
 ```
 
-Or with Docker:
-```bash
-cd services
-docker build -t oneaifw-presidio-service .
-docker run -p 8000:8000 -e API_KEY=changeme-please oneaifw-presidio-service
-```
+The container copies `/opt/aifw/assets/aifw.yaml` to `/data/aifw/aifw.yaml` if missing. Edit it to point to your API key file (not included in the image).
 
 ## Unified API
 - In-process: `services/app/one_aifw_api.py` (class `OneAIFWAPI`)
@@ -36,17 +50,11 @@ python desktop_app.py
 
 ## CLI
 ```bash
-cd cli
-# Basic anonymize/restore/analyze utils
-python -m oneaifw_cli anonymize --text "My email is test@example.com"
-echo "My phone is 13800001111" | python -m oneaifw_cli anonymize -
-python -m oneaifw_cli analyze --text "Contact me at test@example.com"
-python -m oneaifw_cli restore --text "Hello __PII_EMAIL_ADDRESS_abcd1234__" -p '{"__PII_EMAIL_ADDRESS_abcd1234__":"test@example.com"}'
-
-# Unified LLM call (anonymize → LLM → restore)
-python -m oneaifw_cli call --api-key-file ../../api-keys/glm-free-apikey.json "My email is test@example.com, My phone number is 18744325579"
-# Optional model/temperature/language
-python -m oneaifw_cli call --api-key-file ../../api-keys/glm-free-apikey.json --model glm-4 --temperature 0.0 --language en "Hello"
+# Unified call examples (module name changed to aifw)
+python -m aifw direct_call --api-key-file /path/to/api-key.json "Hello"
+python -m aifw launch --work-dir ~/.aifw --log-dest file
+python -m aifw call --url http://127.0.0.1:8844 --api-key-file /path/to/api-key.json "Hello"
+python -m aifw stop --work-dir ~/.aifw
 ```
 
 ## Browser Extension

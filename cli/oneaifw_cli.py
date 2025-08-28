@@ -89,9 +89,14 @@ def _load_config(config_path: str | None) -> dict:
         return {}
 
 
-def _get_effective(arg_val, cfg_val, default_val=None):
-    return arg_val if arg_val not in (None, "") else (cfg_val if cfg_val not in (None, "") else default_val)
-
+def _get_effective_with_env(arg_val, env_names: list[str], cfg_val, default_val=None):
+    if arg_val not in (None, ""):
+        return arg_val
+    for name in env_names:
+        val = os.environ.get(name)
+        if val not in (None, ""):
+            return val
+    return cfg_val if cfg_val not in (None, "") else default_val
 
 def _find_and_load_config(config_arg: str | None, work_dir_arg: str | None) -> tuple[dict, str | None]:
     cfg_path = None
@@ -184,8 +189,8 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     # Load config (if available)
     cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
     # Configure logging destination and level for in-process run
-    level = getattr(logging, (_get_effective(getattr(args, 'log_level', None), cfg.get('log_level'), 'INFO') or 'INFO').upper(), logging.INFO)
-    scopes = _parse_scopes(_get_effective(getattr(args, 'log_scopes', None), cfg.get('log_scopes'), None))
+    level = getattr(logging, (_get_effective_with_env(getattr(args, 'log_level', None), ['AIFW_LOG_LEVEL'], cfg.get('log_level'), 'INFO') or 'INFO').upper(), logging.INFO)
+    scopes = _parse_scopes(_get_effective_with_env(getattr(args, 'log_scopes', None), ['AIFW_LOG_SCOPES'], cfg.get('log_scopes'), None))
     # Delay import so we can reconfigure module loggers after import
     from services.app import local_api  # noqa: WPS433
     # Reset module loggers to avoid duplicate handlers
@@ -215,16 +220,16 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
         logging.getLogger(name).setLevel(set_level)
 
     handler: logging.Handler
-    log_dest = _get_effective(getattr(args, 'log_dest', None), cfg.get('log_dest'), 'stdout')
+    log_dest = _get_effective_with_env(getattr(args, 'log_dest', None), ['AIFW_LOG_DEST'], cfg.get('log_dest'), 'stdout')
     if log_dest == 'file':
         work_dir = resolve_work_dir(getattr(args, 'work_dir', None))
-        base_log = _get_effective(getattr(args, 'log_file', None), cfg.get('log_file'), os.path.join(work_dir, 'aifw-direct.log'))
+        base_log = _get_effective_with_env(getattr(args, 'log_file', None), ['AIFW_LOG_FILE'], cfg.get('log_file'), os.path.join(work_dir, 'aifw-direct.log'))
         log_file = _monthly_log_path(base_log)
         try:
             os.makedirs(os.path.dirname(log_file), exist_ok=True)
             handler = logging.FileHandler(log_file)
             # Cleanup old logs based on config (months)
-            months_to_keep = int(_get_effective(None, cfg.get('log_months_to_keep'), 6) or 6)
+            months_to_keep = int(_get_effective_with_env(None, ['AIFW_LOG_MONTHS_TO_KEEP'], cfg.get('log_months_to_keep'), 6) or 6)
             cleanup_monthly_logs(base_log, months_to_keep)
         except Exception:
             handler = logging.StreamHandler(sys.stdout)
@@ -234,13 +239,13 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     logging.getLogger('services.app').addHandler(handler)
 
     text = read_stdin_if_dash(args.text)
-    api_key_file = _get_effective(getattr(args, 'api_key_file', None), cfg.get('api_key_file'), None)
+    api_key_file = _get_effective_with_env(getattr(args, 'api_key_file', None), ['AIFW_API_KEY_FILE'], cfg.get('api_key_file'), None)
     api_key_file = os.path.abspath(api_key_file) if api_key_file else None
     output = local_api.call(
         text=text,
         api_key_file=api_key_file,
-        model=_get_effective(getattr(args, 'model', None), cfg.get('model'), None),
-        temperature=float(_get_effective(getattr(args, 'temperature', None), cfg.get('temperature'), 0.0) or 0.0),
+        model=None,
+        temperature=float(_get_effective_with_env(getattr(args, 'temperature', None), ['AIFW_TEMPERATURE'], cfg.get('temperature'), 0.0) or 0.0),
     )
     print(output)
     return 0
@@ -250,7 +255,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     # Launch FastAPI service using uvicorn in background
     # Load config
     cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
-    port = int(_get_effective(getattr(args, 'port', None), cfg.get('port'), args.port or 8844))
+    port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), args.port or 8844))
     env = os.environ.copy()
 
     # Enforce global single instance per port: if running, report and exit
@@ -270,20 +275,23 @@ def cmd_launch(args: argparse.Namespace) -> int:
             # stale or unreadable pidfile; ignore and continue to launch
             pass
 
-    api_key_file = _get_effective(getattr(args, 'api_key_file', None), cfg.get('api_key_file'), None)
+    api_key_file = _get_effective_with_env(getattr(args, 'api_key_file', None), ['AIFW_API_KEY_FILE'], cfg.get('api_key_file'), None)
+    if not api_key_file:
+        print("Error: api-key-file is required. Set via --api-key-file, or env AIFW_API_KEY_FILE, or config aifw.yaml.")
+        return 1
     if api_key_file:
-        env["ONEAIFW_DEFAULT_API_KEY_FILE"] = os.path.abspath(api_key_file)
+        env["AIFW_API_KEY_FILE"] = os.path.abspath(api_key_file)
     # Ensure backend package importable
     env["PYTHONPATH"] = (
         (PROJECT_ROOT + (os.pathsep + env.get("PYTHONPATH", "") if env.get("PYTHONPATH") else ""))
     )
     # Import path for app: services.app.main:app
-    log_level = (_get_effective(getattr(args, 'log_level', None), cfg.get('log_level'), 'info') or 'info').lower()
+    log_level = (_get_effective_with_env(getattr(args, 'log_level', None), ['AIFW_LOG_LEVEL'], cfg.get('log_level'), 'info') or 'info').lower()
     # Build uvicorn log-config to include root logger so app logs are captured
     work_dir = resolve_work_dir(getattr(args, 'work_dir', None))
     logcfg_path = os.path.join(work_dir, f"aifw-uvicorn-{port}.json")
     try:
-        scopes = _parse_scopes(_get_effective(getattr(args, 'log_scopes', None), cfg.get('log_scopes'), None))
+        scopes = _parse_scopes(_get_effective_with_env(getattr(args, 'log_scopes', None), ['AIFW_LOG_SCOPES'], cfg.get('log_scopes'), None))
         app_level = log_level.upper()
         # Default third-party not more verbose than app level, min WARNING
         default_third = 'WARNING'
@@ -332,10 +340,10 @@ def cmd_launch(args: argparse.Namespace) -> int:
     except Exception:
         log_config_arg = ""
     cmd = f"{sys.executable} -m uvicorn services.app.main:app --host 127.0.0.1 --port {port} --log-level {log_level}{log_config_arg}"
-    log_dest = _get_effective(getattr(args, 'log_dest', None), cfg.get('log_dest'), 'file')
+    log_dest = _get_effective_with_env(getattr(args, 'log_dest', None), ['AIFW_LOG_DEST'], cfg.get('log_dest'), 'file')
     # Prepare server-side env for monthly cleanup BEFORE launch
-    base_log = _get_effective(getattr(args, 'log_file', None), cfg.get('log_file'), os.path.join(work_dir, f"aifw-server-{port}.log"))
-    months_to_keep = int(_get_effective(None, cfg.get('log_months_to_keep'), 6) or 6)
+    base_log = _get_effective_with_env(getattr(args, 'log_file', None), ['AIFW_LOG_FILE'], cfg.get('log_file'), os.path.join(work_dir, f"aifw-server-{port}.log"))
+    months_to_keep = int(_get_effective_with_env(None, ['AIFW_LOG_MONTHS_TO_KEEP'], cfg.get('log_months_to_keep'), 6) or 6)
     env["AIFW_LOG_FILE"] = os.path.abspath(os.path.expanduser(base_log))
     env["AIFW_LOG_MONTHS_TO_KEEP"] = str(months_to_keep)
     if log_dest == 'stdout':
@@ -397,14 +405,18 @@ def cmd_http_call(args: argparse.Namespace) -> int:
     # Load config
     cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
     text = read_stdin_if_dash(args.text)
-    url = (_get_effective(getattr(args, 'url', None), cfg.get('url'), 'http://localhost:8844') or 'http://localhost:8844').rstrip('/') + '/api/call'
+    api_key_file = _get_effective_with_env(getattr(args, 'api_key_file', None), ['AIFW_API_KEY_FILE'], cfg.get('api_key_file'), None)
+    api_key_file = os.path.abspath(api_key_file) if api_key_file else None
     payload = {
         "text": text,
-        "apiKeyFile": os.path.abspath(_get_effective(getattr(args, 'api_key_file', None), cfg.get('api_key_file'), None)) if _get_effective(getattr(args, 'api_key_file', None), cfg.get('api_key_file'), None) else None,
-        "model": _get_effective(getattr(args, 'model', None), cfg.get('model'), None),
-        "temperature": float(_get_effective(getattr(args, 'temperature', None), cfg.get('temperature'), 0.0) or 0.0),
+        "apiKeyFile": api_key_file,
+        "model": None,
+        "temperature": float(_get_effective_with_env(getattr(args, 'temperature', None), ['AIFW_TEMPERATURE'], cfg.get('temperature'), 0.0) or 0.0),
     }
     data = json.dumps(payload).encode('utf-8')
+    # Derive URL from port (priority: CLI > env > config > default)
+    call_port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), 8844) or 8844)
+    url = f"http://localhost:{call_port}/api/call"
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(req) as resp:
@@ -528,7 +540,7 @@ def build_parser() -> argparse.ArgumentParser:
     # launch: start FastAPI backend
     p_launch = sub.add_parser("launch", help="Start HTTP service (FastAPI)")
     p_launch.add_argument("--config", help="Path to aifw config file (json/yaml)")
-    p_launch.add_argument("--api-key-file", help="Default API key file for backend (env: ONEAIFW_DEFAULT_API_KEY_FILE)")
+    p_launch.add_argument("--api-key-file", help="Default API key file for backend (env: AIFW_API_KEY_FILE)")
     p_launch.add_argument("--port", type=int, default=8844)
     p_launch.add_argument("--work-dir", help="Base dir for config/logs/pid (default ~/.aifw or $AIFW_WORK_DIR)")
     p_launch.add_argument("--state-dir", help="[deprecated] Same as --work-dir")
@@ -549,9 +561,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_http = sub.add_parser("call", help="Call HTTP API /api/call")
     p_http.add_argument("text", help="Text to send or '-' to read from stdin")
     p_http.add_argument("--config", help="Path to aifw config file (json/yaml)")
-    p_http.add_argument("--url", help="Service base URL")
     p_http.add_argument("--api-key-file", help="Key file path passed to backend (optional)")
-    p_http.add_argument("--model", help="LiteLLM model name")
     p_http.add_argument("--temperature", type=float)
     p_http.set_defaults(func=cmd_http_call)
 

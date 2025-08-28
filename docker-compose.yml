@@ -2,6 +2,6 @@ version: '3.8'
 services:
   build: ./
   ports:
-    - '8000:8000'
+    - '8844:8844'
   environment:
     - API_KEY=changeme-please

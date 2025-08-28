@@ -37,7 +37,7 @@ async def health():
 @app.post("/api/call")
 async def api_call(inp: CallIn, x_api_key: Optional[str] = Header(None)):
 	check_api_key(x_api_key)
-	default_key_file = os.environ.get("ONEAIFW_DEFAULT_API_KEY_FILE")
+	default_key_file = os.environ.get("AIFW_API_KEY_FILE")
 	chosen_key_file = inp.apiKeyFile or default_key_file
 	# Server-side monthly log cleanup based on env config
 	base_log = os.environ.get("AIFW_LOG_FILE")

@@ -1,12 +1,19 @@
+# If you want to use aifw, you must set api_key_file for yourself.
+# The json format of api key file is show bellow
+# {
+#         "openai-model": "your_model_name",
+#         "openai-base-url": "api base url",
+#         "openai-api-key": "your model api key"
+# }
+# api_key_file: <your_api_key_file_path>
+
 port: 8844
-# The default api_key_file is copy from file "OneAIFW/api-keys/glm-free-apikey.json"
-api_key_file: "../../api-keys/glm-free-apikey.json"
 log_level: "INFO"
 log_scopes: "app,uvicorn"
 log_dest: "file"
 log_file: "~/.aifw/aifw_server.log"
-model: "glm-4"
 temperature: 0.0
 
 # The number of month to keep log file, the out of date log file will be deleted.
 log_months_to_keep: 6
+
