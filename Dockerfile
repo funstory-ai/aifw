@@ -28,8 +28,11 @@ RUN set -e; \
     if [ "$SPACY_PROFILE" = "de" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download de_core_news_sm || true; fi; \
     if [ "$SPACY_PROFILE" = "ja" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download ja_core_news_sm || true; fi
 
-# Copy project
-COPY . /opt/aifw
+# Copy only necessary project files to minimize image size
+COPY cli/*.py cli/requirements.txt /opt/aifw/cli/
+COPY aifw/*.py /opt/aifw/aifw/
+COPY services/app/*.py services/app/*.json services/requirements.txt /opt/aifw/services/app/
+COPY assets/*.yaml assets/*.json /opt/aifw/assets/
 
 # Ensure runtime dirs; no API keys baked in image
 RUN mkdir -p ${AIFW_WORK_DIR} /var/log/aifw && \
