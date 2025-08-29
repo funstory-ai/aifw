@@ -1,0 +1,5 @@
+{
+  "openai-api-key": "test-local-echo",
+  "openai-base-url": "http://127.0.0.1:8801/v1",
+  "openai-model": "echo-001"
+}

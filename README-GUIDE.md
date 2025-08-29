@@ -67,3 +67,9 @@ Load `browser_extension` as unpacked extension in Chrome/Edge developer mode.
 - spaCy 模型：首次使用请安装 `en_core_web_sm`。安装：`python -m spacy download en_core_web_sm`（在对应 venv 中执行）。
 - LLM 网关（OpenAI 兼容）：在配置 JSON 中提供 `openai-api-key` / `openai-base-url` / `openai-model`，CLI 通过 `--api-key-file` 读取。
 - The anonymization uses placeholders that are robust to LLM round-trips.
+
+## Local fake LLM
+The local fake LLM is just echo the chat text to client. Launch the local fake LLM by bellow command.
+```bash
+python -m uvicorn services.fake_llm.echo_server:app --host 127.0.0.1 --port 8801
+```
