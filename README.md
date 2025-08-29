@@ -7,18 +7,100 @@ OneAIFW works like a transparent proxy between caller and callee.
 
 
 ## Getting Started
+OneAIFW lets you safely call external LLM providers by anonymizing sensitive data first, then restoring it after the model response. You can run it as a local HTTP service or use an in‑process CLI. Follow the steps below to get up and running quickly.
 
-The simplest way to use OneAIFW is as the followings
+### Clone and create venv
 ```bash
-aifw --api-url https://openrouter/api/v1
+git clone https://github.com/<your-org>/OneAIFW.git
+cd OneAIFW
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
 ```
-You can see the output
+
+### Install dependencies
+```bash
+pip install -r services/requirements.txt
+pip install -r cli/requirements.txt
+python -m spacy download en_core_web_sm
+python -m spacy download zh_core_web_sm
+python -m spacy download xx_ent_wiki_sm || true
+```
+
+### Prepare config and API key file
+```bash
+mkdir -p ~/.aifw
+cp assets/aifw.yaml ~/.aifw/aifw.yaml
+# edit ~/.aifw/aifw.yaml and set api_key_file to your key JSON
+```
+
+### Launch HTTP server
+The default output of logger is file
+```bash
+python -m aifw launch
+```
+You should see output like:
 ```
 aifw is running at http://localhost:8844.
+logs: ~/.aifw/aifw_server-2025-08.log
 ```
-You just need to replace the api address with the local one in your AI application.
 
-Then enjoy your AI exploration without concern about your privacy and secrets.
+### Call the HTTP service
+```bash
+python -m aifw call "请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
+```
+
+You can override the API key file per call using `--api-key-file`:
+```bash
+python -m aifw call --api-key-file /path/to/api-keys/your-key.json "..."
+```
+
+### Stop the server
+```bash
+python -m aifw stop
+```
+
+### Direct in-process call (no HTTP)
+```bash
+python -m aifw direct_call "请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
+```
+
+You can also switch provider dynamically per call:
+```bash
+python -m aifw direct_call --api-key-file /path/to/api-keys/your-key.json "..."
+```
+
+### Parameter precedence
+
+For all configurable parameters, the resolution order is:
+
+1. Command-line arguments
+2. Environment variables
+3. Config file (`aifw.yaml`)
+
+For example, the API key file is resolved as:
+
+- CLI: `--api-key-file`
+- Env: `AIFW_API_KEY_FILE`
+- Config: `api_key_file` in `aifw.yaml`
+
+The same precedence applies to port, logging options, etc.
+
+## API key JSON format (OpenAI-compatible)
+
+Example:
+```json
+{
+  "openai-api-key": "xxxxxxxx.xxxx",
+  "openai-base-url": "https://api.openai.com/v1",
+  "openai-model": "gpt-4o-mini"
+}
+```
+
+- openai-api-key: Your API key string used for authentication.
+- openai-base-url: Base URL of an OpenAI-compatible endpoint (e.g., OpenAI, a gateway, or a vendor’s OpenAI-style API).
+- openai-model: Default model identifier for requests (can be overridden internally as needed).
+
+Note: Keys using underscores are also accepted (e.g., `openai_api_key`, `openai_base_url`, `openai_model`).
 
 ## What we protect for you
 
@@ -40,4 +122,55 @@ Crypto:
 - Address
 
 
+
+## Docker
+
+Build profiles for spaCy models via `--build-arg SPACY_PROFILE=...`:
+
+- minimal (default): en_core_web_sm, zh_core_web_sm, xx_ent_wiki_sm
+- fr: minimal + fr_core_news_sm
+- de: minimal + de_core_news_sm
+- ja: minimal + ja_core_news_sm
+- multi: minimal + fr/de/ja
+
+```bash
+# Build minimal
+docker build -t oneaifw:minimal .
+
+# Build French / German / Japanese
+docker build --build-arg SPACY_PROFILE=fr -t oneaifw:fr .
+docker build --build-arg SPACY_PROFILE=de -t oneaifw:de .
+docker build --build-arg SPACY_PROFILE=ja -t oneaifw:ja .
+
+# Build multi-language
+docker build --build-arg SPACY_PROFILE=multi -t oneaifw:multi .
+
+# Run (mount host work dir with config/logs and your api keys)
+docker run --rm -p 8844:8844 \
+  -v $HOME/.aifw:/data/aifw \
+  oneaifw:minimal
+```
+
+On first run the container copies `/opt/aifw/assets/aifw.yaml` to `/data/aifw/aifw.yaml` if missing. Edit it to point to your API key file (not included in the image).
+
+### Set api_key_file for Docker
+
+You can provide the API key file to the container via an environment variable and a bind mount. Two options:
+
+- Put your key file inside your host work dir (`~/.aifw`) and mount the directory:
+```bash
+# Ensure the key file is at ~/.aifw/your-key.json on host
+docker run --rm -p 8844:8844 \
+  -e AIFW_API_KEY_FILE=/data/aifw/your-key.json \
+  -v $HOME/.aifw:/data/aifw \
+  oneaifw:latest
+```
+
+- Or mount the key file directly to a path inside the container and point AIFW_API_KEY_FILE to it:
+```bash
+docker run --rm -p 8844:8844 \
+  -e AIFW_API_KEY_FILE=/data/aifw/your-key.json \
+  -v /path/to/api-keys/your-key.json:/data/aifw/your-key.json \
+  oneaifw:latest
+```
 
