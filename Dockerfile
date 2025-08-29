@@ -22,16 +22,16 @@ RUN pip install --upgrade pip && \
 # Install spaCy models per profile
 RUN set -e; \
     python -m spacy download en_core_web_sm; \
-    python -m spacy download zh_core_web_sm || true; \
-    python -m spacy download xx_ent_wiki_sm || true; \
+    python -m spacy download zh_core_web_sm; \
+    python -m spacy download xx_ent_wiki_sm; \
     if [ "$SPACY_PROFILE" = "fr" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download fr_core_news_sm || true; fi; \
     if [ "$SPACY_PROFILE" = "de" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download de_core_news_sm || true; fi; \
     if [ "$SPACY_PROFILE" = "ja" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download ja_core_news_sm || true; fi
 
 # Copy only necessary project files to minimize image size
-COPY cli/*.py cli/requirements.txt /opt/aifw/cli/
+COPY cli/*.py /opt/aifw/cli/
 COPY aifw/*.py /opt/aifw/aifw/
-COPY services/app/*.py services/app/*.json services/requirements.txt /opt/aifw/services/app/
+COPY services/app/*.py services/app/*.json /opt/aifw/services/app/
 # Copy default config template (no secrets)
 COPY assets/*.yaml assets/*.json /opt/aifw/assets/
 

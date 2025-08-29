@@ -1,3 +1,5 @@
+# **Note: This file is not for user, this file will be deleted**
+
 # OneAIFW - Local Presidio-based Reversible Anonymization Framework
 
 This repository provides a local Presidio-based service (OneAIFW) with:

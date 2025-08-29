@@ -23,7 +23,7 @@ pip install -r services/requirements.txt
 pip install -r cli/requirements.txt
 python -m spacy download en_core_web_sm
 python -m spacy download zh_core_web_sm
-python -m spacy download xx_ent_wiki_sm || true
+python -m spacy download xx_ent_wiki_sm
 ```
 
 ### Prepare config and API key file
