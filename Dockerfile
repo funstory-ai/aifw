@@ -32,14 +32,12 @@ RUN set -e; \
 COPY cli/*.py cli/requirements.txt /opt/aifw/cli/
 COPY aifw/*.py /opt/aifw/aifw/
 COPY services/app/*.py services/app/*.json services/requirements.txt /opt/aifw/services/app/
+# Copy default config template (no secrets)
 COPY assets/*.yaml assets/*.json /opt/aifw/assets/
 
 # Ensure runtime dirs; no API keys baked in image
 RUN mkdir -p ${AIFW_WORK_DIR} /var/log/aifw && \
     chmod -R 777 ${AIFW_WORK_DIR} /var/log/aifw
-
-# Copy default config template (no secrets)
-COPY assets/aifw.yaml /opt/aifw/assets/aifw.yaml
 
 # Entrypoint: prepare work dir and default config if missing
 RUN printf '#!/bin/sh\nset -e\n: "${AIFW_WORK_DIR:=/data/aifw}"\nmkdir -p "${AIFW_WORK_DIR}"\nif [ ! -f "${AIFW_WORK_DIR}/aifw.yaml" ] && [ -f "/opt/aifw/assets/aifw.yaml" ]; then\n  cp /opt/aifw/assets/aifw.yaml "${AIFW_WORK_DIR}/aifw.yaml";\nfi\nexport PYTHONPATH="/opt/aifw:${PYTHONPATH:-}"\nexec "$@"\n' > /usr/local/bin/aifw-entrypoint.sh && \
@@ -52,5 +50,5 @@ ENV PYTHONPATH=/opt/aifw
 EXPOSE 8844
 
 ENTRYPOINT ["/usr/local/bin/aifw-entrypoint.sh"]
-# Default: run the OneAIFW HTTP server; user must mount api key file and optionally override config
-CMD ["python", "-m", "aifw", "launch", "--log-dest", "stdout", "--work-dir", "/data/aifw"]
+# Default: run the OneAIFW in interactive mode; user must mount api key file and optionally override config
+CMD ["/bin/bash"]

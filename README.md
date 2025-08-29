@@ -27,6 +27,8 @@ python -m spacy download xx_ent_wiki_sm || true
 ```
 
 ### Prepare config and API key file
+The default aifw.yaml is in assets directory, you can modify this file for yourself.
+
 ```bash
 mkdir -p ~/.aifw
 cp assets/aifw.yaml ~/.aifw/aifw.yaml
@@ -144,14 +146,7 @@ docker build --build-arg SPACY_PROFILE=ja -t oneaifw:ja .
 
 # Build multi-language
 docker build --build-arg SPACY_PROFILE=multi -t oneaifw:multi .
-
-# Run (mount host work dir with config/logs and your api keys)
-docker run --rm -p 8844:8844 \
-  -v $HOME/.aifw:/data/aifw \
-  oneaifw:minimal
 ```
-
-On first run the container copies `/opt/aifw/assets/aifw.yaml` to `/data/aifw/aifw.yaml` if missing. Edit it to point to your API key file (not included in the image).
 
 ### Set api_key_file for Docker
 
@@ -174,3 +169,40 @@ docker run --rm -p 8844:8844 \
   oneaifw:latest
 ```
 
+### Using the Docker image to run aifw commands
+
+Since the Docker image’s default command already launches the HTTP server, you don’t need to run `aifw launch` manually. You can still execute other commands inside the running container:
+
+1) Run the OneAIFW docker image in interactive mode
+```bash
+docker run -it --name aifw \
+  -p 8844:8844 \
+  -e AIFW_API_KEY_FILE=/data/aifw/your-key.json \
+  -v $HOME/.aifw:/data/aifw \
+  oneaifw:latest \
+  /bin/bash
+```
+
+2) Start the OneAIFW server
+```bash
+# Use the CLI interface of OneAIFW inside container
+python -m aifw launch
+```
+
+3) Call the OneAIFW for translate text or do other things
+```bash
+# Use the CLI interface of OneAIFW inside container
+python -m aifw call "请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
+```
+
+4) Stop the OneAIFW server
+```bash
+# Use the CLI interface of OneAIFW inside container
+python -m aifw stop
+```
+
+5) Exit the OneAIFW docker and Cleanup resources
+```bash
+exit
+docker rm -f aifw
+```
