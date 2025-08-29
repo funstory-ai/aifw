@@ -55,12 +55,15 @@ jobs:
           echo $! > echo_llm.pid
           for i in $(seq 1 20); do curl -sf http://127.0.0.1:8801/v1/health && break || sleep 0.5; done
 
-      - name: Prepare OpenAI-compatible key file
+      - name: Prepare OpenAI-compatible docker key file (host.docker.internal)
         run: |
-          cat > $RUNNER_TEMP/echo-apikey.json << 'JSON'
+          # This file points to the fake LLM running on the runner host.
+          # Inside Docker, 127.0.0.1 refers to the container itself, so we use
+          # host.docker.internal (mapped via --add-host below) to reach the host.
+          cat > $RUNNER_TEMP/echo-apikey-docker.json << 'JSON'
           {
             "openai-api-key": "test-local-echo",
-            "openai-base-url": "http://127.0.0.1:8801/v1",
+            "openai-base-url": "http://host.docker.internal:8801/v1",
             "openai-model": "echo-001"
           }
           JSON
@@ -68,9 +71,11 @@ jobs:
       - name: Smoke test container (launch → call → stop)
         run: |
           PROMPT="请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
+          # map special DNS name to host gateway, so that the container can reach the host.
           docker run --rm \
+            --add-host=host.docker.internal:host-gateway \
             -e AIFW_API_KEY_FILE=/data/aifw/echo.json \
-            -v $RUNNER_TEMP/echo-apikey.json:/data/aifw/echo.json \
+            -v $RUNNER_TEMP/echo-apikey-docker.json:/data/aifw/echo.json \
             ghcr.io/${{ github.repository_owner }}/oneaifw:latest \
             sh -lc '
               python -m aifw launch &
@@ -81,9 +86,11 @@ jobs:
       - name: Smoke test container (direct_call)
         run: |
           PROMPT="请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
+          # map special DNS name to host gateway, so that the container can reach the host.
           docker run --rm \
+            --add-host=host.docker.internal:host-gateway \
             -e AIFW_API_KEY_FILE=/data/aifw/echo.json \
-            -v $RUNNER_TEMP/echo-apikey.json:/data/aifw/echo.json \
+            -v $RUNNER_TEMP/echo-apikey-docker.json:/data/aifw/echo.json \
             ghcr.io/${{ github.repository_owner }}/oneaifw:latest \
             sh -lc 'python -m aifw direct_call "$PROMPT"'
 
