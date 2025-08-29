@@ -11,8 +11,8 @@ OneAIFW lets you safely call external LLM providers by anonymizing sensitive dat
 
 ### Clone and create venv
 ```bash
-git clone https://github.com/<your-org>/OneAIFW.git
-cd OneAIFW
+git clone https://github.com/funstory-ai/aifw.git
+cd aifw
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
 ```
