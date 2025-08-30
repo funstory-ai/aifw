@@ -17,16 +17,19 @@ COPY cli/requirements.txt /opt/aifw/cli/requirements.txt
 
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r /opt/aifw/services/requirements.txt && \
-    pip install --no-cache-dir -r /opt/aifw/cli/requirements.txt
+    pip install --no-cache-dir -r /opt/aifw/cli/requirements.txt && \
+    python -m pip cache purge || true
 
 # Install spaCy models per profile
 RUN set -e; \
     python -m spacy download en_core_web_sm; \
-    python -m spacy download zh_core_web_sm; \
-    python -m spacy download xx_ent_wiki_sm; \
+    python -m spacy download zh_core_web_sm || true; \
     if [ "$SPACY_PROFILE" = "fr" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download fr_core_news_sm || true; fi; \
     if [ "$SPACY_PROFILE" = "de" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download de_core_news_sm || true; fi; \
-    if [ "$SPACY_PROFILE" = "ja" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download ja_core_news_sm || true; fi
+    if [ "$SPACY_PROFILE" = "ja" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download ja_core_news_sm || true; fi; \
+    if [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download xx_ent_wiki_sm || true; fi; \
+    find /usr/local/lib -type d -name '__pycache__' -prune -exec rm -rf {} + || true && \
+    find /usr/local/lib -type f -name '*.pyc' -delete || true
 
 # Copy only necessary project files to minimize image size
 COPY cli/*.py /opt/aifw/cli/
