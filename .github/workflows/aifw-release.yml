@@ -51,7 +51,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install fastapi uvicorn pydantic
-          python -m uvicorn services.fake_llm.echo_server:app --host 127.0.0.1 --port 8801 &
+          python -m uvicorn services.fake_llm.echo_server:app --host 0.0.0.0 --port 8801 &
           echo $! > echo_llm.pid
           for i in $(seq 1 20); do curl -sf http://127.0.0.1:8801/v1/health && break || sleep 0.5; done
 
@@ -71,7 +71,7 @@ jobs:
       - name: Smoke test container (launch → call → stop)
         run: |
           PROMPT="请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
-          # map special DNS name to host gateway, so that the container can reach the host.
+          # Map host.docker.internal to host gateway so the container can reach the fake LLM on the runner
           docker run --rm \
             --add-host=host.docker.internal:host-gateway \
             -e AIFW_API_KEY_FILE=/data/aifw/echo.json \
@@ -86,7 +86,7 @@ jobs:
       - name: Smoke test container (direct_call)
         run: |
           PROMPT="请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
-          # map special DNS name to host gateway, so that the container can reach the host.
+          # Map host.docker.internal to host gateway so the container can reach the fake LLM on the runner
           docker run --rm \
             --add-host=host.docker.internal:host-gateway \
             -e AIFW_API_KEY_FILE=/data/aifw/echo.json \
