@@ -99,6 +99,131 @@ def _build_per_language_patterns(lang: str) -> List[PatternRecognizer]:
         supported_language=lang,
     )
     recognizers.append(cnid_rec)
+    # URL (generic)
+    url_pat = Pattern(
+        name='URL',
+        regex=r'(?:https?://[^\s)]+|\b(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?:/[\w\-./?%&=+#]*)?)',
+        score=0.8,
+    )
+    url_rec = PatternRecognizer(
+        supported_entity='URL',
+        patterns=[url_pat],
+        context=['url', '链接', 'website', 'link', 'http', 'https'],
+        supported_language=lang,
+    )
+    recognizers.append(url_rec)
+
+    # PHYSICAL_ADDRESS (very conservative heuristic)
+    address_pat = Pattern(
+        name='Physical Address',
+        regex=r'\b\d{1,5}\s+[A-Za-z0-9 .,-]{3,}\s+(Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Way|Suite|Ste\.?|Apt\.?)\b',
+        score=0.65,
+    )
+    address_rec = PatternRecognizer(
+        supported_entity='PHYSICAL_ADDRESS',
+        patterns=[address_pat],
+        context=['address', '住址', '地址', '公司地址', '家庭地址'],
+        supported_language=lang,
+    )
+    recognizers.append(address_rec)
+
+    # USER_NAME (prefer PERSON from spaCy, but capture explicit forms)
+    username_pat = Pattern(
+        name='User Name',
+        regex=r'\b(?:name|username|user name|full name|姓名)\s*[:：]\s*[A-Za-z\u4e00-\u9fff][\w\u4e00-\u9fff .-]{1,49}',
+        score=0.6,
+    )
+    username_rec = PatternRecognizer(
+        supported_entity='USER_NAME',
+        patterns=[username_pat],
+        context=['name', 'username', '姓名'],
+        supported_language=lang,
+    )
+    recognizers.append(username_rec)
+
+    # BANK_NUMBER (12-19 digits with optional separators)
+    bank_pat = Pattern(
+        name='Bank Number',
+        regex=r'\b(?:\d[ -]?){12,19}\b',
+        score=0.65,
+    )
+    bank_rec = PatternRecognizer(
+        supported_entity='BANK_NUMBER',
+        patterns=[bank_pat],
+        context=['bank', 'account', 'acct', '卡号', '银行账号', 'iban'],
+        supported_language=lang,
+    )
+    recognizers.append(bank_rec)
+
+    # PAYMENT (credit card numbers – broad, lower score)
+    cc_pat = Pattern(
+        name='Payment Card',
+        regex=r'\b(?:\d[ -]?){13,19}\b',
+        score=0.6,
+    )
+    payment_rec = PatternRecognizer(
+        supported_entity='PAYMENT',
+        patterns=[cc_pat],
+        context=['card', 'credit', 'debit', 'visa', 'mastercard', 'amex', 'payment', 'cvv', 'cvc'],
+        supported_language=lang,
+    )
+    recognizers.append(payment_rec)
+
+    # VERIFY_CODE (OTP/verification code 4-8 chars)
+    vcode_pat = Pattern(
+        name='Verify Code',
+        regex=r'\b(?:code|otp|验证码|one[- ]?time password|verification code)\b\s*[:：]?\s*[A-Za-z0-9]{4,8}\b',
+        score=0.75,
+    )
+    vcode_rec = PatternRecognizer(
+        supported_entity='VERIFY_CODE',
+        patterns=[vcode_pat],
+        context=['code', 'otp', '2fa', '验证码'],
+        supported_language=lang,
+    )
+    recognizers.append(vcode_rec)
+
+    # PASSWORD (value following password/pwd)
+    pwd_pat = Pattern(
+        name='Password',
+        regex=r'\b(?:password|pwd|pass|密码)\b\s*[:：]?\s*([\S]{4,})',
+        score=0.7,
+    )
+    pwd_rec = PatternRecognizer(
+        supported_entity='PASSWORD',
+        patterns=[pwd_pat],
+        context=['password', 'pwd', 'pass', '密码'],
+        supported_language=lang,
+    )
+    recognizers.append(pwd_rec)
+
+    # RANDOM_SEED (crypto seed / mnemonic phrases)
+    seed_pat = Pattern(
+        name='Random Seed',
+        regex=r'\b(?:seed phrase|mnemonic|随机数种子)\b\s*[:：]?\s*(?:[A-Za-z]{3,}(?:\s+|,)){5,}[A-Za-z]{3,}',
+        score=0.75,
+    )
+    seed_rec = PatternRecognizer(
+        supported_entity='RANDOM_SEED',
+        patterns=[seed_pat],
+        context=['seed', 'mnemonic', '随机数种子'],
+        supported_language=lang,
+    )
+    recognizers.append(seed_rec)
+
+    # PRIVATE_KEY (PEM blocks or long hex/base64 following key label)
+    pkey_pat = Pattern(
+        name='Private Key',
+        regex=r'-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|\b(?:private key|私钥)\b\s*[:：]?\s*[A-Za-z0-9+/=]{40,}',
+        score=0.85,
+    )
+    pkey_rec = PatternRecognizer(
+        supported_entity='PRIVATE_KEY',
+        patterns=[pkey_pat],
+        context=['private key', 'ssh-rsa', 'ssh-ed25519', '私钥'],
+        supported_language=lang,
+    )
+    recognizers.append(pkey_rec)
     # FR Phone only for fr
     if lang == 'fr':
         fr_phone_pat = Pattern(name='FR Phone', regex=r'(?:\+33|0033|0)\s?[1-9](?:[\s\.-]?\d{2}){4}', score=0.75)

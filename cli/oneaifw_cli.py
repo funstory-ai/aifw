@@ -241,13 +241,40 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     text = read_stdin_if_dash(args.text)
     api_key_file = _get_effective_with_env(getattr(args, 'api_key_file', None), ['AIFW_API_KEY_FILE'], cfg.get('api_key_file'), None)
     api_key_file = os.path.abspath(api_key_file) if api_key_file else None
-    output = local_api.call(
-        text=text,
-        api_key_file=api_key_file,
-        model=None,
-        temperature=float(_get_effective_with_env(getattr(args, 'temperature', None), ['AIFW_TEMPERATURE'], cfg.get('temperature'), 0.0) or 0.0),
-    )
-    print(output)
+    stage = getattr(args, 'stage', 'restored') or 'restored'
+    temp = float(_get_effective_with_env(getattr(args, 'temperature', None), ['AIFW_TEMPERATURE'], cfg.get('temperature'), 0.0) or 0.0)
+
+    if stage == 'restored':
+        output = local_api.call(
+            text=text,
+            api_key_file=api_key_file,
+            model=None,
+            temperature=temp,
+        )
+        print(output)
+        return 0
+
+    # For anonymized stages, run the in-process API internals explicitly
+    from services.app.one_aifw_api import OneAIFWAPI  # lazy import
+    from services.app.llm_client import LLMClient, load_llm_api_config
+    api = OneAIFWAPI()
+    language = api._analyzer_wrapper.detect_language(text)
+    anon = api._anonymizer_wrapper.anonymize(text=text, operators=None, language=language)
+    anonymized_text = anon.get('text', '')
+
+    if stage == 'anonymized':
+        print(anonymized_text)
+        return 0
+
+    if stage == 'anonymized_via_llm':
+        if api_key_file:
+            load_llm_api_config(api_key_file)
+        llm = LLMClient()
+        echoed = llm.call(text=anonymized_text, model=None, temperature=temp)
+        print(echoed)
+        return 0
+
+    print(anonymized_text)
     return 0
 
 
@@ -527,6 +554,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_direct.add_argument("text", help="Text to send or '-' to read from stdin")
     p_direct.add_argument("--model", help="LiteLLM model name (e.g., gpt-4o-mini, glm-4)")
     p_direct.add_argument("--temperature", type=float, default=0.0)
+    p_direct.add_argument("--stage", choices=["restored", "anonymized", "anonymized_via_llm"], default="restored",
+                          help="Output stage: final restored (default), anonymized only, or anonymized sent via LLM (echo)")
     p_direct.add_argument("--api-key-file", help="Path to JSON config with openai-api-key/base-url/model")
     p_direct.add_argument("--config", help="Path to aifw config file (json/yaml)")
     p_direct.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")

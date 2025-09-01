@@ -73,3 +73,40 @@ The local fake LLM is just echo the chat text to client. Launch the local fake L
 ```bash
 python -m uvicorn services.fake_llm.echo_server:app --host 127.0.0.1 --port 8801
 ```
+
+## Validate anonymization correctness (using --stage anonymized)
+
+Use the provided test inputs under `test/` and the local fake LLM (echo) to verify the anonymization output exactly matches the expected anonymized text.
+
+1) Generate anonymized text (no LLM, no restore) and compare to expected:
+```bash
+cat test/test_en_pii.txt | \
+  python -m aifw direct_call \
+    --log-dest stdout \
+    --api-key-file assets/local-fake-llm-apikey.json \
+    --stage anonymized - > out.anonymized.txt
+
+diff -u test/test_en_pii.anonymized.expected.txt out.anonymized.txt
+```
+
+2) Send anonymized text via fake LLM echo (still no restore) and compare to expected:
+```bash
+cat test/test_en_pii.txt | \
+  python -m aifw direct_call \
+    --log-dest stdout \
+    --api-key-file assets/local-fake-llm-apikey.json \
+    --stage anonymized_via_llm - > out.anonymized.llm.txt
+
+diff -u test/test_en_pii.anonymized.expected.txt out.anonymized.llm.txt
+```
+
+3) Optional: verify full pipeline (anonymize → LLM → restore) returns the original text:
+```bash
+cat test/test_en_pii.txt | \
+  python -m aifw direct_call \
+    --log-dest stdout \
+    --api-key-file assets/local-fake-llm-apikey.json \
+    --stage restored - > out.restored.txt
+
+diff -u test/test_en_pii.txt out.restored.txt
+```

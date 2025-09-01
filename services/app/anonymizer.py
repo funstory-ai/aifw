@@ -5,7 +5,6 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import logging
 import sys
-import uuid
 import re
 
 logger = logging.getLogger(__name__)
@@ -59,8 +58,15 @@ class AnonymizerWrapper:
                 selected.append(cand)
         logger.debug(f"anonymize: selected={[ (r.entity_type, r.start, r.end) for r in selected ]}")
 
-        for r in sorted(selected, key=lambda x: x.start, reverse=True):
-            placeholder = f"__PII_{r.entity_type}_{uuid.uuid4().hex[:8]}__"
+        # Two-loop approach: assign IDs L→R, then replace R→L to avoid index shifts
+        assigned = []
+        counter = 0
+        for r in sorted(selected, key=lambda x: x.start):
+            counter += 1
+            pii_id = f"{counter:08x}"
+            placeholder = f"__PII_{r.entity_type}_{pii_id}__"
+            assigned.append((r, placeholder))
+        for r, placeholder in sorted(assigned, key=lambda t: t[0].start, reverse=True):
             placeholders[placeholder] = text[r.start:r.end]
             new_text = new_text[:r.start] + placeholder + new_text[r.end:]
         logger.info(f"anonymized_text={new_text}")

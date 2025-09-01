@@ -1,0 +1,23 @@
+Please translate the following to Chinese:
+
+Dear Support Team,
+
+This is __PII_PERSON_00000001__ from __PII_ORGANIZATION_00000002__ (Username: __PII_USER_NAME_00000003__). I'm reaching out about a small account issue—sorry if this message is a bit long 🙏. 
+
+My home address is: __PII_PHYSICAL_ADDRESS_00000004__ (yep, the old adress—spelled wrong on my last form, my bad!).
+You can reach me at my email: __PII_EMAIL_ADDRESS_00000005__, or call me at __PII_PHONE_NUMBER_00000006__. When I'm in China, my mobile is __PII_PHONE_NUMBER_00000007__ (still active).
+
+For the refund you mentioned, my bank account number is __PII_BANK_NUMBER_00000008__. Alternatively, you can use my payment card (dummy for testing only): Visa __PII_PAYMENT_00000009__, CVV 123, exp 12/34 — please DO NOT actually charge this; it's just a placeholder for your QA case.
+
+To log in to the staging portal, use this temporary verification code: __PII_VERIFY_CODE_0000000a__. For the sandbox box, the pwd: __PII_PASSWORD_0000000b__ (I'll reset it after your tests, promise!).
+
+For our wallet demo (again, test data only), here's the seed phrase: __PII_RANDOM_SEED_0000000c__.
+And below is a dummy private key block (not real, just for parsing checks):
+__PII_PRIVATE_KEY_0000000d__
+
+If you need more info, see __PII_URL_0000000e__ — or our docs at __PII_URL_0000000f__ (sometimes the intranet link __PII_URL_00000010__ redirects weirdly, FYI).
+
+Thanks a ton for your help! If anything looks off, feel free to ping me back.
+
+Sincerely,
+__PII_PERSON_00000011__
