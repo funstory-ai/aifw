@@ -236,7 +236,13 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     else:
         handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    logging.getLogger('services.app').addHandler(handler)
+    for name in [
+        'services.app',
+        'services.app.analyzer',
+        'services.app.anonymizer',
+        'services.app.llm_client',
+    ]:
+        logging.getLogger(name).addHandler(handler)
 
     text = read_stdin_if_dash(args.text)
     api_key_file = _get_effective_with_env(getattr(args, 'api_key_file', None), ['AIFW_API_KEY_FILE'], cfg.get('api_key_file'), None)
