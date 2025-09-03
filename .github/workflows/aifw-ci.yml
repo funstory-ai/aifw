@@ -21,14 +21,15 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r services/requirements.txt
-          pip install -r cli/requirements.txt
+          pip install -r py-origin/services/requirements.txt
+          pip install -r py-origin/cli/requirements.txt
           python -m spacy download en_core_web_sm
           python -m spacy download xx_ent_wiki_sm
           python -m spacy download zh_core_web_sm
 
       - name: Start fake LLM (echo) in background
         run: |
+          cd py-origin
           python -m uvicorn services.fake_llm.echo_server:app --host 127.0.0.1 --port 8801 &
           echo $! > echo_llm.pid
           for i in $(seq 1 20); do curl -sf http://127.0.0.1:8801/v1/health && break || sleep 0.5; done
@@ -47,6 +48,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
+          cd py-origin
           PROMPT="请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
           # direct_call (in-process)
           python -m aifw direct_call --api-key-file $RUNNER_TEMP/echo-apikey.json "My email is test@example.com"

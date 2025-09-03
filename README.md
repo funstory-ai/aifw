@@ -13,12 +13,14 @@ OneAIFW lets you safely call external LLM providers by anonymizing sensitive dat
 ```bash
 git clone https://github.com/funstory-ai/aifw.git
 cd aifw
+cd py-origin
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
 ```
 
 ### Install dependencies
 ```bash
+cd py-origin
 pip install -r services/requirements.txt
 pip install -r cli/requirements.txt
 python -m spacy download en_core_web_sm
@@ -30,6 +32,7 @@ python -m spacy download xx_ent_wiki_sm
 The default aifw.yaml is in assets directory, you can modify this file for yourself.
 
 ```bash
+cd py-origin
 mkdir -p ~/.aifw
 cp assets/aifw.yaml ~/.aifw/aifw.yaml
 # edit ~/.aifw/aifw.yaml and set api_key_file to your key JSON
@@ -38,6 +41,7 @@ cp assets/aifw.yaml ~/.aifw/aifw.yaml
 ### Launch HTTP server
 The default output of logger is file
 ```bash
+cd py-origin
 python -m aifw launch
 ```
 You should see output like:
@@ -48,26 +52,31 @@ logs: ~/.aifw/aifw_server-2025-08.log
 
 ### Call the HTTP service
 ```bash
+cd py-origin
 python -m aifw call "请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
 ```
 
 You can override the API key file per call using `--api-key-file`:
 ```bash
+cd py-origin
 python -m aifw call --api-key-file /path/to/api-keys/your-key.json "..."
 ```
 
 ### Stop the server
 ```bash
+cd py-origin
 python -m aifw stop
 ```
 
 ### Direct in-process call (no HTTP)
 ```bash
+cd py-origin
 python -m aifw direct_call "请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
 ```
 
 You can also switch provider dynamically per call:
 ```bash
+cd py-origin
 python -m aifw direct_call --api-key-file /path/to/api-keys/your-key.json "..."
 ```
 
@@ -136,6 +145,7 @@ Build profiles for spaCy models via `--build-arg SPACY_PROFILE=...`:
 - multi: minimal + fr/de/ja
 
 ```bash
+cd py-origin
 # Build minimal
 docker build -t oneaifw:minimal .
 

@@ -34,7 +34,9 @@ RUN set -e; \
 # Copy only necessary project files to minimize image size
 COPY cli/*.py /opt/aifw/cli/
 COPY aifw/*.py /opt/aifw/aifw/
-COPY services/app/*.py services/app/*.json services/fake_llm/*.py /opt/aifw/services/app/
+COPY services/app/*.py /opt/aifw/services/app/
+COPY services/app/*.json /opt/aifw/services/app/
+COPY services/fake_llm/*.py /opt/aifw/services/fake_llm/
 # Copy default config template (no secrets)
 COPY assets/*.yaml assets/*.json /opt/aifw/assets/
 

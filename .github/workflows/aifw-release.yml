@@ -39,7 +39,8 @@ jobs:
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: py-origin
+          file: Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: |
@@ -49,6 +50,7 @@ jobs:
 
       - name: Start fake LLM (echo) on runner
         run: |
+          cd py-origin
           python -m pip install --upgrade pip
           pip install fastapi uvicorn pydantic
           python -m uvicorn services.fake_llm.echo_server:app --host 0.0.0.0 --port 8801 &
