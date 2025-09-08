@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OneAIFW NER (Transformers.js)</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, Helvetica, "Apple Color Emoji", "Segoe UI Emoji"; margin: 2rem; }
+      textarea { width: 100%; height: 8rem; }
+      pre { background: #f6f8fa; padding: 1rem; overflow: auto; }
+      .row { margin-bottom: 1rem; }
+      label { display:block; font-weight: 600; margin-bottom: .25rem; }
+      select, input[type=text] { width: 100%; padding: .5rem; }
+      button { padding: .5rem 1rem; }
+      .inline { display: inline-block; margin-right: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>OneAIFW NER (Transformers.js)</h1>
+    <div class="row">
+      <label for="model">Model (preloaded or browser-compatible)</label>
+      <select id="model">
+        <!--
+        <option value="Xenova/bert-base-NER" selected>Xenova/bert-base-NER</option>
+        -->
+        <option value="Xenova/distilbert-base-cased-finetuned-conll03-english" selected>Xenova/distilbert-base-cased-finetuned-conll03-english</option>
+        <option value="mrm8488/mobilebert-finetuned-ner">mrm8488/mobilebert-finetuned-ner (requires local converted assets)</option>
+        <option value="gagan3012/bert-tiny-finetuned-ner">gagan3012/bert-tiny-finetuned-ner</option>
+        <option value="dslim/distilbert-NER">dslim/distilbert-NER</option>
+      </select>
+    </div>
+    <div class="row">
+      <span class="inline">
+        <input id="quantized" type="checkbox" checked />
+        <label for="quantized" class="inline">Use quantized weights (if available)</label>
+      </span>
+    </div>
+    <div class="row">
+      <label for="text">Input text</label>
+      <textarea id="text">My name is Sarah and I live in London</textarea>
+    </div>
+    <div class="row">
+      <button id="run">Run NER</button>
+    </div>
+    <div class="row">
+      <label>Output</label>
+      <pre id="out">(waiting)</pre>
+    </div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

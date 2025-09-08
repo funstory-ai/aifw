@@ -1,0 +1,21 @@
+{
+  "name": "oneaifw-transformers-browser-demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/prep-models.mjs --offline --strict",
+    "prebuild": "node scripts/prep-models.mjs --offline --strict",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "prep:online": "ALLOW_REMOTE=1 node scripts/prep-models.mjs"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.16.1",
+    "https-proxy-agent": "^7.0.6"
+  },
+  "devDependencies": {
+    "vite": "^7.1.4"
+  }
+}

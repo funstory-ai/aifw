@@ -1,0 +1,15 @@
+# Python deps for exporting Hugging Face models to ONNX and INT8 quantization
+# Install with: pip install -r tools/requirements.txt
+
+# Core DL stack
+torch>=2.2.0
+transformers>=4.41.0
+tokenizers<0.20
+safetensors>=0.4.2
+huggingface_hub>=0.24.0
+numpy<2
+
+# ONNX export and tooling
+onnx>=1.15.0
+onnxruntime>=1.18.0
+onnxsim>=0.4.36
