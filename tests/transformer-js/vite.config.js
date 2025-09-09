@@ -9,6 +9,10 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     open: true,
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
     configureServer(server) {
       const ROOT = process.cwd()
       const MODELS_ROOT = path.join(ROOT, 'public', 'models')

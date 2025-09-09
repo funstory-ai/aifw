@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import torch
-from transformers import AutoTokenizer, AutoModelForTokenClassification
+from transformers import AutoTokenizer, AutoConfig, AutoModelForTokenClassification, AutoModelForSequenceClassification
 
 try:
     from onnxruntime.quantization import quantize_dynamic, QuantType
@@ -111,11 +111,12 @@ def maybe_quantize(src_onnx: Path, dst_onnx: Path, enable: bool) -> None:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Export HF token-classification model to ONNX and optionally quantize/optimize")
+    ap = argparse.ArgumentParser(description="Export HF model to ONNX and optionally quantize/optimize")
     ap.add_argument("--model", help="HF repo id (e.g., gagan3012/bert-tiny-finetuned-ner) or local dir.")
     ap.add_argument("--out-dir", default="ner-models", help="Output base directory (default: ner-models)")
     ap.add_argument("--name", default=None, help="Subdir name under out-dir; defaults to repo id")
     ap.add_argument("--no-quant", action="store_true", help="Disable dynamic INT8 quantization")
+    ap.add_argument("--task", choices=["token-classification", "sequence-classification"], default=None, help="Task head to export (auto-detect if omitted)")
     ap.add_argument("--opt", action="store_true", help="Apply ONNX graph optimization (simplifier)")
     ap.add_argument("--opset", type=int, default=14)
     args = ap.parse_args()
@@ -134,7 +135,35 @@ def main():
     print(f"[load] {repo_or_dir}")
     # Pass through HF env/proxy automatically; users can set HF_TOKEN/HF_ENDPOINT/HTTP(S)_PROXY
     tokenizer = AutoTokenizer.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
-    model = AutoModelForTokenClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+    model = None
+    if args.task:
+        if args.task == "token-classification":
+            model = AutoModelForTokenClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+        else:
+            model = AutoModelForSequenceClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+    else:
+        # auto-detect by config architectures when possible
+        cfg = None
+        try:
+            cfg = AutoConfig.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+        except Exception:
+            cfg = None
+        archs = [a.lower() for a in (getattr(cfg, "architectures", []) or [])]
+        picked = None
+        for a in archs:
+            if "tokenclassification" in a or "token_classification" in a:
+                picked = "token-classification"; break
+            if "sequenceclassification" in a or "sequence_classification" in a:
+                picked = "sequence-classification"; break
+        if picked == "sequence-classification":
+            model = AutoModelForSequenceClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+        else:
+            # default to token-classification (works for NER models)
+            try:
+                model = AutoModelForTokenClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+            except Exception:
+                # fallback to sequence classification if token head unavailable
+                model = AutoModelForSequenceClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
 
     # Ensure required tokenizer/config files are present alongside ONNX model for the browser demo
     # Prefer fast tokenizer.json if available; else copy vocab.txt

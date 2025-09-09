@@ -119,6 +119,96 @@ const SUPPORTED = [
     ],
     remoteBase: 'https://huggingface.co/dslim/distilbert-NER/resolve/main/',
   },
+  {
+    id: 'Mozilla/mobilebert-uncased-finetuned-LoRA-intent-classifier',
+    core: [
+      'config.json',
+      'onnx/model_quantized.onnx',
+    ],
+    tokenizerAlt: [
+      'tokenizer.json',
+      'vocab.txt',
+    ],
+    extra: [
+      'tokenizer_config.json',
+    ],
+    remoteBase: 'https://huggingface.co/Mozilla/mobilebert-uncased-finetuned-LoRA-intent-classifier/resolve/main/',
+    remoteBaseOnnx: null,
+    exportFrom: 'Mozilla/mobilebert-uncased-finetuned-LoRA-intent-classifier',
+    task: 'sequence-classification',
+  },
+  {
+    id: 'boltuix/NeuroBERT-Mini',
+    core: [
+      'config.json',
+      'onnx/model_quantized.onnx',
+    ],
+    tokenizerAlt: [
+      'tokenizer.json',
+      'vocab.txt',
+    ],
+    extra: [
+      'tokenizer_config.json',
+    ],
+    remoteBase: 'https://huggingface.co/boltuix/NeuroBERT-Mini/resolve/main/',
+    remoteBaseOnnx: null,
+    exportFrom: 'boltuix/NeuroBERT-Mini',
+    task: 'sequence-classification',
+  },
+  {
+    id: 'dmis-lab/TinyPubMedBERT-v1.0',
+    core: [
+      'config.json',
+      'onnx/model_quantized.onnx',
+    ],
+    tokenizerAlt: [
+      'tokenizer.json',
+      'vocab.txt',
+    ],
+    extra: [
+      'tokenizer_config.json',
+    ],
+    remoteBase: 'https://huggingface.co/dmis-lab/TinyPubMedBERT-v1.0/resolve/main/',
+    remoteBaseOnnx: null,
+    exportFrom: 'dmis-lab/TinyPubMedBERT-v1.0',
+    task: 'token-classification',
+  },
+  {
+    id: 'mrm8488/TinyBERT-spanish-uncased-finetuned-ner',
+    core: [
+      'config.json',
+      'onnx/model_quantized.onnx',
+    ],
+    tokenizerAlt: [
+      'tokenizer.json',
+      'vocab.txt',
+    ],
+    extra: [
+      'tokenizer_config.json',
+    ],
+    remoteBase: 'https://huggingface.co/mrm8488/TinyBERT-spanish-uncased-finetuned-ner/resolve/main/',
+    remoteBaseOnnx: null,
+    exportFrom: 'mrm8488/TinyBERT-spanish-uncased-finetuned-ner',
+    task: 'token-classification',
+  },
+  {
+    id: 'boltuix/NeuroBERT-Small',
+    core: [
+      'config.json',
+      'onnx/model_quantized.onnx',
+    ],
+    tokenizerAlt: [
+      'tokenizer.json',
+      'vocab.txt',
+    ],
+    extra: [
+      'tokenizer_config.json',
+    ],
+    remoteBase: 'https://huggingface.co/boltuix/NeuroBERT-Small/resolve/main/',
+    remoteBaseOnnx: null,
+    exportFrom: 'boltuix/NeuroBERT-Small',
+    task: 'sequence-classification',
+  },
 ]
 
 async function ensureDir(p) {
@@ -286,7 +376,11 @@ async function ensureQuantizedIfMissing(model) {
     console.warn(`[prep-models] quantized file check mismatch (isFile=${st.isFile()}, size=${st.size}, inDir=${appearsInListing}); will regenerate: ${qPath}`)
   } catch (_) {}
   console.log(`[prep-models] quantized model missing, attempting conversion: ${modelId}`)
+  // Pass task to exporter via env
+  const prevTask = process.env.EXPORT_TASK
+  if (model.task) process.env.EXPORT_TASK = model.task
   const ok = await runPythonQuantizer(exportFrom, modelId)
+  if (prevTask === undefined) delete process.env.EXPORT_TASK; else process.env.EXPORT_TASK = prevTask
   if (ok) {
     try {
       const st2 = await fsp.stat(qPath)
