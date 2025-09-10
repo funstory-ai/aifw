@@ -25,6 +25,7 @@ body {
     word-wrap: break-word;
     background-color: #f8f9fa;
     border: 1px solid #dee2e6;
+    text-align: left;
 }
 
 .btn {
@@ -162,4 +163,226 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
     background: #a8a8a8;
+}
+
+/* 工作原理动画样式 */
+.workflow-animation {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 30px 20px;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 10px;
+    border: 2px solid #dee2e6;
+    position: relative;
+    overflow: hidden;
+}
+
+.workflow-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 20px 15px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    border: 2px solid transparent;
+    transition: all 0.3s ease;
+    opacity: 0.6;
+    transform: scale(0.95);
+    min-width: 120px;
+    max-width: 150px;
+    flex-shrink: 0;
+}
+
+.workflow-step.active {
+    opacity: 1;
+    transform: scale(1);
+    border-color: #007bff;
+    box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3);
+}
+
+.workflow-step.completed {
+    opacity: 0.8;
+    border-color: #28a745;
+    background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+}
+
+.step-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 20px;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
+}
+
+.workflow-step.active .step-icon {
+    background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%);
+    animation: pulse 1s infinite;
+}
+
+.workflow-step.completed .step-icon {
+    background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%);
+}
+
+.step-content h6 {
+    margin: 0 0 5px 0;
+    font-weight: 600;
+    color: #333;
+    font-size: 1rem;
+}
+
+.step-content p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: #666;
+    text-align: center;
+}
+
+.workflow-arrow {
+    font-size: 20px;
+    color: #007bff;
+    animation: bounce 2s infinite;
+    z-index: 10;
+    flex-shrink: 0;
+}
+
+.workflow-arrow.reverse {
+    color: #28a745;
+}
+
+@keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+}
+
+@keyframes bounce {
+    0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+    40% { transform: translateY(-10px); }
+    60% { transform: translateY(-5px); }
+}
+
+/* 动画控制按钮 */
+#startAnimation {
+    transition: all 0.3s ease;
+}
+
+#startAnimation:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+}
+
+/* GitHub按钮样式 */
+.github-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 6px;
+    color: white;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    backdrop-filter: blur(10px);
+}
+
+.github-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.5);
+    color: white;
+    text-decoration: none;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.github-btn i.fab {
+    font-size: 16px;
+}
+
+.github-text {
+    font-weight: 600;
+}
+
+.github-stars {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(255, 255, 255, 0.15);
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.github-stars i.fas {
+    color: #ffd700;
+    font-size: 11px;
+}
+
+.star-count {
+    color: #fff;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.star-count.loading {
+    animation: pulse 1s infinite;
+}
+
+.star-count.success {
+    color: #ffd700 !important;
+    animation: bounce 0.6s ease;
+}
+
+@keyframes bounce {
+    0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+    40% { transform: translateY(-3px); }
+    60% { transform: translateY(-1px); }
+}
+
+/* 响应式设计 - 动画 */
+@media (max-width: 768px) {
+    .workflow-animation {
+        padding: 15px;
+        gap: 10px;
+    }
+    
+    .workflow-step {
+        padding: 12px 15px;
+        gap: 12px;
+    }
+    
+    .step-icon {
+        width: 40px;
+        height: 40px;
+        font-size: 16px;
+    }
+    
+    .workflow-arrow {
+        font-size: 20px;
+    }
+    
+    .github-btn {
+        padding: 6px 12px;
+        font-size: 13px;
+    }
+    
+    .github-stars {
+        padding: 3px 6px;
+        font-size: 11px;
+    }
 }

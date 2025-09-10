@@ -12,6 +12,7 @@ class AIFWApp {
     init() {
         this.bindEvents();
         this.checkHealth();
+        this.loadGitHubStars();
     }
 
     bindEvents() {
@@ -19,6 +20,7 @@ class AIFWApp {
         document.getElementById('maskBtn').addEventListener('click', () => this.maskText());
         document.getElementById('restoreBtn').addEventListener('click', () => this.restoreText());
         document.getElementById('clearBtn').addEventListener('click', () => this.clearAll());
+        document.getElementById('startAnimation').addEventListener('click', () => this.startWorkflowAnimation());
     }
 
     async checkHealth() {
@@ -238,6 +240,143 @@ class AIFWApp {
         this.anonymizedText = '';
         this.placeholdersMap = {};
         this.entities = [];
+    }
+
+    startWorkflowAnimation() {
+        const button = document.getElementById('startAnimation');
+        const steps = document.querySelectorAll('.workflow-step');
+        const arrows = document.querySelectorAll('.workflow-arrow');
+        const userText = document.getElementById('userText');
+        const firewallText = document.getElementById('firewallText');
+        const llmText = document.getElementById('llmText');
+        const arrow1 = document.getElementById('arrow1');
+        const arrow2 = document.getElementById('arrow2');
+        
+        // 禁用按钮防止重复点击
+        button.disabled = true;
+        button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>动画播放中...';
+        
+        // 重置所有步骤状态
+        steps.forEach(step => {
+            step.classList.remove('active', 'completed');
+        });
+        
+        // 重置箭头状态
+        arrows.forEach(arrow => {
+            arrow.classList.remove('reverse');
+        });
+        
+        // 定义动画序列
+        const animationSequence = [
+            // 去程阶段
+            { step: 0, text: { user: '发送敏感数据', firewall: '匿名化处理', llm: '处理安全数据' }, arrows: { arrow1: 'right', arrow2: 'right' } },
+            { step: 1, text: { user: '发送敏感数据', firewall: '匿名化处理', llm: '处理安全数据' }, arrows: { arrow1: 'right', arrow2: 'right' } },
+            { step: 2, text: { user: '发送敏感数据', firewall: '匿名化处理', llm: '处理安全数据' }, arrows: { arrow1: 'right', arrow2: 'right' } },
+            
+            // 回程阶段
+            { step: 2, text: { user: '获得安全结果', firewall: '还原隐私数据', llm: '返回处理结果' }, arrows: { arrow1: 'left', arrow2: 'left' } },
+            { step: 1, text: { user: '获得安全结果', firewall: '还原隐私数据', llm: '返回处理结果' }, arrows: { arrow1: 'left', arrow2: 'left' } },
+            { step: 0, text: { user: '获得安全结果', firewall: '还原隐私数据', llm: '返回处理结果' }, arrows: { arrow1: 'left', arrow2: 'left' } }
+        ];
+        
+        let currentIndex = 0;
+        const stepDelay = 1000; // 每个步骤显示1秒
+        
+        const animateStep = () => {
+            if (currentIndex < animationSequence.length) {
+                const current = animationSequence[currentIndex];
+                
+                // 激活当前步骤
+                steps[current.step].classList.add('active');
+                
+                // 更新文字内容
+                userText.textContent = current.text.user;
+                firewallText.textContent = current.text.firewall;
+                llmText.textContent = current.text.llm;
+                
+                // 更新箭头方向
+                if (current.arrows.arrow1 === 'left') {
+                    arrow1.classList.add('reverse');
+                    arrow1.querySelector('i').className = 'fas fa-arrow-left';
+                } else {
+                    arrow1.classList.remove('reverse');
+                    arrow1.querySelector('i').className = 'fas fa-arrow-right';
+                }
+                
+                if (current.arrows.arrow2 === 'left') {
+                    arrow2.classList.add('reverse');
+                    arrow2.querySelector('i').className = 'fas fa-arrow-left';
+                } else {
+                    arrow2.classList.remove('reverse');
+                    arrow2.querySelector('i').className = 'fas fa-arrow-right';
+                }
+                
+                currentIndex++;
+                
+                // 延迟后继续下一步
+                setTimeout(() => {
+                    if (currentIndex > 1) {
+                        steps[current.step].classList.remove('active');
+                        steps[current.step].classList.add('completed');
+                    }
+                    animateStep();
+                }, stepDelay);
+            } else {
+                // 动画完成
+                setTimeout(() => {
+                    steps[0].classList.remove('active');
+                    steps[0].classList.add('completed');
+                    
+                    // 恢复按钮状态
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-play me-2"></i>观看动画演示';
+                }, stepDelay);
+            }
+        };
+        
+        // 开始动画
+        animateStep();
+    }
+
+    async loadGitHubStars() {
+        const starElement = document.querySelector('.star-count');
+        if (!starElement) return;
+        
+        // 显示加载状态
+        starElement.textContent = '...';
+        starElement.className = 'star-count loading';
+        
+        try {
+            const response = await fetch('https://api.github.com/repos/funstory-ai/aifw', {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/vnd.github.v3+json',
+                }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                const starCount = data.stargazers_count;
+                
+                // 更新显示
+                starElement.textContent = starCount;
+                starElement.className = 'star-count success';
+                starElement.title = `${starCount} stars on GitHub`;
+                
+                // 添加成功提示
+                console.log(`GitHub stars loaded: ${starCount}`);
+            } else {
+                throw new Error(`GitHub API error: ${response.status}`);
+            }
+        } catch (error) {
+            console.log('GitHub stars not available:', error.message);
+            
+            // 显示失败状态
+            starElement.textContent = '-';
+            starElement.className = 'star-count';
+            starElement.style.color = '#ccc';
+            starElement.title = '无法获取star数量';
+        }
     }
 }
 

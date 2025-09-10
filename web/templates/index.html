@@ -14,9 +14,17 @@
             <a class="navbar-brand" href="#">
                 <i class="fas fa-shield-alt me-2"></i>OneAIFW
             </a>
-            <span class="navbar-text">
-                本地轻量级隐私保护防火墙
+            <span class="navbar-text me-auto">
+                本地轻量级AI防火墙
             </span>
+            <a href="https://github.com/funstory-ai/aifw" target="_blank" class="github-btn">
+                <i class="fab fa-github"></i>
+                <span class="github-text">GitHub</span>
+                <span class="github-stars" id="githubStars">
+                    <i class="fas fa-star"></i>
+                    <span class="star-count">-</span>
+                </span>
+            </a>
         </div>
     </nav>
 
@@ -31,12 +39,59 @@
                         </h2>
                     </div>
                     <div class="card-body">
-                        <p class="lead">OneAIFW 是一个本地轻量级防火墙，可以保护用户在调用外部 LLM API 时不会泄露隐私或秘密信息。</p>
+                        <p class="lead">OneAIFW 是一款本地轻量级 AI 防火墙，能够在用户调用外部大模型 API 时，为敏感信息提供安全防护，避免隐私或机密数据的泄露。</p>
                         
                         <div class="row">
                             <div class="col-md-6">
                                 <h5><i class="fas fa-shield-alt text-primary me-2"></i>工作原理</h5>
                                 <p>OneAIFW 在调用者和被调用者之间充当透明代理，先对敏感数据进行匿名化处理，然后在模型响应后恢复原始数据。</p>
+                                
+                                <!-- 工作原理动画 -->
+                                <div class="workflow-animation mt-3">
+                                    <div class="workflow-step" data-step="1">
+                                        <div class="step-icon">
+                                            <i class="fas fa-user"></i>
+                                        </div>
+                                        <div class="step-content">
+                                            <h6>用户</h6>
+                                            <p id="userText">发送敏感数据</p>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="workflow-arrow" id="arrow1">
+                                        <i class="fas fa-arrow-right"></i>
+                                    </div>
+                                    
+                                    <div class="workflow-step" data-step="2">
+                                        <div class="step-icon">
+                                            <i class="fas fa-shield-alt"></i>
+                                        </div>
+                                        <div class="step-content">
+                                            <h6>AI防火墙</h6>
+                                            <p id="firewallText">匿名化处理</p>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="workflow-arrow" id="arrow2">
+                                        <i class="fas fa-arrow-right"></i>
+                                    </div>
+                                    
+                                    <div class="workflow-step" data-step="3">
+                                        <div class="step-icon">
+                                            <i class="fas fa-robot"></i>
+                                        </div>
+                                        <div class="step-content">
+                                            <h6>LLM</h6>
+                                            <p id="llmText">处理安全数据</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="text-center mt-3">
+                                    <button type="button" class="btn btn-outline-primary btn-sm" id="startAnimation">
+                                        <i class="fas fa-play me-2"></i>观看动画演示
+                                    </button>
+                                </div>
                             </div>
                             <div class="col-md-6">
                                 <h5><i class="fas fa-lock text-success me-2"></i>保护内容</h5>
@@ -174,7 +229,7 @@
 
     <footer class="bg-dark text-white text-center py-3 mt-5">
         <div class="container">
-            <p class="mb-0">&copy; 2024 OneAIFW - 保护您的隐私，安全使用 AI</p>
+            <p class="mb-0">&copy; 2025 OneAIFW - 保护您的隐私，安全使用 AI</p>
         </div>
     </footer>
 

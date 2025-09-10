@@ -6,7 +6,6 @@ AIFW Web Module Runner
 
 import os
 import sys
-import subprocess
 
 def main():
     print("=== AIFW Web Module ===")
@@ -20,7 +19,7 @@ def main():
     # 检查依赖
     # 启动应用
     print("\n启动 Web 服务器...")
-    print("访问地址: http://localhost:5000")
+    print("访问地址: http://localhost:5001")
     print("按 Ctrl+C 停止服务器")
     print("-" * 50)
     
