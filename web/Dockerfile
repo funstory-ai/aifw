@@ -63,4 +63,5 @@ EXPOSE 5001
 
 ENTRYPOINT ["/usr/local/bin/aifw-entrypoint.sh"]
 # Default: run the web application
-CMD ["python", "/opt/aifw/web/run.py"]
+WORKDIR /opt/aifw/web
+CMD ["./run.py"]

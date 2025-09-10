@@ -48,6 +48,25 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Build and push (web)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: web/Dockerfile
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            SPACY_PROFILE=minimal
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/oneaifw-web:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/oneaifw-web:latest
+          labels: |
+            org.opencontainers.image.title=OneAIFW Web
+            org.opencontainers.image.description=AI Framework Web Interface
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
       - name: Start fake LLM (echo) on runner
         run: |
           cd py-origin
