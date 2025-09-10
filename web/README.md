@@ -16,7 +16,7 @@ AIFW Web 模块提供了一个基于 Web 的界面来演示 OneAIFW 项目的隐
 ### 1. 安装依赖
 
 ```bash
-cd web
+pip install -r ../py-origin/services/requirements.txt
 pip install -r requirements.txt
 ```
 
