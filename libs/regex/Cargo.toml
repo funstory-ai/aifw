@@ -1,0 +1,16 @@
+[package]
+name = "aifw_regex"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+# Generate only static library (.a) for all targets (native + wasm)
+crate-type = ["staticlib"]
+
+[dependencies]
+regex-automata = { version = "0.4", default-features = false, features = ["alloc", "meta", "syntax", "unicode"] }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

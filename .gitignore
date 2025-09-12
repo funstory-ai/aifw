@@ -6,6 +6,10 @@
 __pycache__
 .venv
 
+.zig-cache
+zig-out
+target
+
 ner-models
 
 tests/transformer-js/node_modules
