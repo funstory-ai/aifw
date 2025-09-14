@@ -42,7 +42,8 @@ const CompiledRegex = struct {
     score: f32,
 };
 
-pub fn init(allocator: std.mem.Allocator,
+pub fn init(
+    allocator: std.mem.Allocator,
     specs: []const PatternSpec,
     entity_type: EntityType,
     validate_fn: ?ValidateResultFn,
@@ -68,7 +69,7 @@ pub fn init(allocator: std.mem.Allocator,
     };
 }
 
-pub fn deinit(self: *RegexRecognizer) void {
+pub fn deinit(self: *const RegexRecognizer) void {
     for (self.compiled_regexs) |c| aifw_regex_free(c.re);
     self.allocator.free(self.compiled_regexs);
 }

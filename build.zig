@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
         .root_module = aifw_core_native,
         .linkage = .static,
     });
-    lib.root_module.strip = true;
+    lib.root_module.strip = optimize != .Debug;
     // Build and link Rust regex (native)
     const cargo_native = b.addSystemCommand(&[_][]const u8{ "cargo", "build", "--release" });
     cargo_native.setCwd(b.path("libs/regex"));
@@ -41,7 +41,7 @@ pub fn build(b: *std.Build) void {
         .root_module = aifw_core_wasm,
         .linkage = .static,
     });
-    wasm.root_module.strip = true;
+    wasm.root_module.strip = optimize != .Debug;
     // Build and link Rust regex (wasm)
     const cargo_wasm = b.addSystemCommand(&[_][]const u8{ "cargo", "build", "--release", "--target", "wasm32-unknown-unknown" });
     cargo_wasm.setCwd(b.path("libs/regex"));
