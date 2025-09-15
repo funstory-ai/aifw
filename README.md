@@ -96,6 +96,140 @@ For example, the API key file is resolved as:
 
 The same precedence applies to port, logging options, etc.
 
+## zig build
+
+We use Zig's build system as the single entrypoint to orchestrate the whole project: the Zig core library, Rust regex static libs, the browser JS app under `tests/transformer-js`, and the Python apps under `py-origin`. This gives us a reproducible, cross‑platform build with one command.
+
+Feasibility: Zig's build runner can invoke arbitrary system commands (Cargo, Node/NPM, Python, etc.) via process steps, manage dependencies between them, and expose convenient targets. This pattern is already used in this repo to build the Rust regex libraries for both native and WASM. Extending it to JS and Python is straightforward and recommended.
+
+High‑level targets (conceptual):
+- Core: `zig build` builds Zig static libs and Rust `.a` (native + WASM)
+- Tests: `zig build test` (unit), `zig build inttest` (integration executable)
+- Web app: `zig build web` prepares models and builds `tests/transformer-js` with Vite
+- Web dev server: `zig build web-dev` runs Vite dev (long‑running)
+- Python: `zig build py-setup` prepares venv; `zig build py-wheel` builds a wheel; `zig build py-run` runs the app or service
+
+Notes:
+- The current `build.zig` already wires the core library, Rust regex (native/WASM), and tests. Adding `web`, `web-dev`, and Python targets is done by adding system command steps (NPM/Cargo/Python) and wiring dependencies.
+- Outputs can be:
+  - JS web app bundle (for standalone demo, or copied into a browser extension/package)
+  - Python wheel or runnable entrypoints (CLI and service)
+
+Environment variables honored during JS model preparation (when `zig build web` runs `tests/transformer-js/scripts/prep-models.mjs`):
+- `ALLOW_REMOTE=1` enables online model downloads
+- `HF_TOKEN`, `HF_ENDPOINT` provide Hugging Face auth/mirror
+- `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` control network proxying
+
+Example end‑to‑end flows (once the targets are added):
+```bash
+# Build everything (core + regex + planned web bundle)
+zig build
+
+# Unit tests for core
+zig build -Doptimize=Debug test
+
+# Integration test executable
+zig build inttest && zig-out/bin/aifw_core_test
+
+# Build the web demo (downloads/converts models, then vite build)
+ALLOW_REMOTE=1 HF_TOKEN=... zig build web
+
+# Prepare Python venv and build a wheel
+zig build py-setup
+zig build py-wheel
+```
+
+
+## Zig core library
+
+The core library is implemented in Zig with two build targets: native and `wasm32-freestanding`. It integrates a Rust‑based regex engine (using `regex-automata`) compiled to static libraries (`.a`) for both native and WASM, then linked into the Zig library.
+
+Highlights:
+- Pipeline architecture with two pipelines: `mask` and `restore`
+- Session holds configured components and allocators; pipelines are pure and side‑effect free
+- RegexRecognizer (Rust regex via C ABI), NerRecognizer (external NER → spans), SpanMerger (merge/filter/dedup spans)
+- Placeholders are dynamically generated like `__PII_EMAIL_ADDRESS_00000001__`, but produced using a stack buffer (no heap) and metadata stores only `(EntityType, serial)` to avoid dangling pointers and minimize memory
+- Restore reconstructs placeholders on the fly and replaces them with the original spans in order
+- Built and tested with Zig 0.15.1; Rust static libs are produced for native and `wasm32-unknown-unknown`
+
+### Prerequisites
+
+- Zig 0.15.1 (required)
+- Rust toolchain (stable) with Cargo
+  - Add WASM target: `rustup target add wasm32-unknown-unknown`
+
+Verify versions:
+
+```bash
+zig version        # should print 0.15.1
+rustc --version
+cargo --version
+```
+
+### Build (native + WASM)
+
+The build orchestrates Rust static libraries and Zig artifacts automatically:
+
+```bash
+# From repository root
+zig build
+```
+
+What happens:
+- Builds Rust regex C-ABI static libs:
+  - Native: `libs/regex/target/release/libaifw_regex.a`
+  - WASM: `libs/regex/target/wasm32-unknown-unknown/release/libaifw_regex.a`
+- Builds Zig static libraries:
+  - Native: `oneaifw_core` (.a)
+  - WASM (freestanding): `oneaifw_core_wasm` (.a)
+
+Artifacts are installed under `zig-out/`.
+
+### Debug symbols and stack traces
+
+Debug builds keep symbols so crashes can show stack traces:
+
+```bash
+zig build -Doptimize=Debug
+```
+
+Release builds strip symbols by default.
+
+### Unit tests (Zig)
+
+Run Zig unit tests defined in `core/aifw_core.zig`:
+
+```bash
+zig build -Doptimize=Debug test
+```
+
+Example output:
+
+```text
+masked=Contact me: __PII_EMAIL_ADDRESS_00000001__ and visit __PII_URL_ADDRESS_00000002__
+restored=Contact me: a.b+1@test.io and visit https://ziglang.org
+```
+
+### Integration test executable
+
+An integration test is provided at `tests/test-aifw-core/test_session.zig` and built as a standalone executable:
+
+```bash
+# Build and run the integration test
+zig build inttest
+
+# Or run the installed binary directly after build
+zig-out/bin/aifw_core_test
+```
+
+This test exercises the full mask/restore pipeline, including the Rust regex recognizers.
+
+### Notes on the core design
+
+- The `Pipeline` has `mask` and `restore` modes. Masking replaces sensitive spans with placeholders like `__PII_EMAIL_ADDRESS_00000001__` and records metadata; restoring reconstructs the original text using that metadata.
+- Placeholders are generated without heap allocations using a stack buffer; metadata stores only `(EntityType, serial)` to minimize memory and avoid pointer invalidation.
+- Rust regex is implemented with `regex-automata` and exposed via a C ABI static library; it is built for native and WASM targets and linked into the Zig core.
+
 ## API key JSON format (OpenAI-compatible)
 
 Example:
