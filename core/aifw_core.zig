@@ -28,18 +28,9 @@ pub const MaskMetaData = struct {
     placeholder_dict: []PlaceholderMatchedPair,
 };
 
-pub const MaskResult = struct {
-    masked_text: []u8,
-    mask_meta_data: MaskMetaData,
-};
-
 pub const RestoreArgs = struct {
     masked_text: []const u8,
     mask_meta_data: MaskMetaData,
-};
-
-pub const RestoreResult = struct {
-    restored_text: []u8,
 };
 
 pub const PipelineArgs = union(PipelineKind) {
@@ -47,9 +38,34 @@ pub const PipelineArgs = union(PipelineKind) {
     restore: RestoreArgs,
 };
 
+pub const MaskResult = struct {
+    masked_text: []u8,
+    mask_meta_data: MaskMetaData,
+
+    pub fn deinit(self: *const MaskResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.masked_text);
+        allocator.free(self.mask_meta_data.placeholder_dict);
+    }
+};
+
+pub const RestoreResult = struct {
+    restored_text: []u8,
+
+    pub fn deinit(self: *const RestoreResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.restored_text);
+    }
+};
+
 pub const PipelineResult = union(PipelineKind) {
     mask: MaskResult,
     restore: RestoreResult,
+
+    pub fn deinit(self: *const PipelineResult, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .mask => self.mask.deinit(allocator),
+            .restore => self.restore.deinit(allocator),
+        }
+    }
 };
 
 pub const Pipeline = struct {
@@ -248,8 +264,7 @@ test "session mask/restore" {
     const args = MaskArgs{ .original_text = input, .ner_data = &[_]RecogEntity{} };
     const masked = (try session.getPipeline(.mask).run(.{ .mask = args })).mask;
     std.debug.print("masked={s}\n", .{masked.masked_text});
-    defer allocator.free(masked.masked_text);
-    defer allocator.free(masked.mask_meta_data.placeholder_dict);
+    defer masked.deinit(allocator);
 
     const restored = (try session.getPipeline(.restore).run(.{
         .restore = .{
@@ -258,6 +273,6 @@ test "session mask/restore" {
         },
     })).restore;
     std.debug.print("restored={s}\n", .{restored.restored_text});
-    defer allocator.free(restored.restored_text);
+    defer restored.deinit(allocator);
     try std.testing.expect(restored.restored_text.len == input.len);
 }
