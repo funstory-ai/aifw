@@ -6,14 +6,17 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var session = try core.Session.init(allocator);
+    var session = try core.Session.init(allocator, .{ .ner_recog_type = .token_classification });
     defer session.deinit();
 
     const input = "Hi, my email is example.test@funstory.com, my phone number is 13800138027";
     const out_mask = (try session.getPipeline(.mask).run(.{
         .mask = .{
             .original_text = input,
-            .ner_data = &[_]core.RecogEntity{},
+            .ner_data = .{
+                .text = input,
+                .entities = &[_]core.NerRecognizer.NerRecogEntity{},
+            },
         },
     })).mask;
     defer out_mask.deinit(allocator);

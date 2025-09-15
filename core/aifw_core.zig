@@ -1,16 +1,12 @@
 const std = @import("std");
-const RegexRecognizer = @import("RegexRecognizer.zig");
+pub const RegexRecognizer = @import("RegexRecognizer.zig");
+pub const NerRecognizer = @import("NerRecognizer.zig");
 const entity = @import("recog_entity.zig");
 
 pub const PipelineKind = enum { mask, restore };
 
 pub const RecogEntity = entity.RecogEntity;
 pub const EntityType = entity.EntityType;
-
-pub const MaskArgs = struct {
-    original_text: []const u8,
-    ner_data: []const RecogEntity, // external NER results
-};
 
 pub const PlaceholderMatchedPair = struct {
     // The entity_id and entity_type is placeholder's information
@@ -26,6 +22,25 @@ pub const MaskMetaData = struct {
     // The placeholder_dict is a dictionary of placeholder and matched text,
     // the key is the placeholder, the value is the matched text.
     placeholder_dict: []PlaceholderMatchedPair,
+};
+
+pub const MaskInitArgs = struct {
+    regex_list: []const RegexRecognizer,
+    ner_recognizer: *const NerRecognizer,
+};
+
+pub const RestoreInitArgs = struct {
+    // no args
+};
+
+pub const PipelineInitArgs = union(PipelineKind) {
+    mask: MaskInitArgs,
+    restore: RestoreInitArgs,
+};
+
+pub const MaskArgs = struct {
+    original_text: []const u8,
+    ner_data: NerRecognizer.NerRecogData, // external NER recognition results
 };
 
 pub const RestoreArgs = struct {
@@ -68,44 +83,68 @@ pub const PipelineResult = union(PipelineKind) {
     }
 };
 
-pub const Pipeline = struct {
-    allocator: std.mem.Allocator,
-    kind: PipelineKind,
-    // components
-    regex_list: []const RegexRecognizer = &[_]RegexRecognizer{},
+pub const Pipeline = union(PipelineKind) {
+    mask: MaskPipeline,
+    restore: RestorePipeline,
 
-    pub fn init(allocator: std.mem.Allocator, kind: PipelineKind, regex_list: []const RegexRecognizer) Pipeline {
-        return .{ .allocator = allocator, .kind = kind, .regex_list = regex_list };
+    pub fn init(allocator: std.mem.Allocator, init_args: PipelineInitArgs) Pipeline {
+        return switch (init_args) {
+            .mask => .{ .mask = MaskPipeline.init(allocator, init_args.mask) },
+            .restore => .{ .restore = RestorePipeline.init(allocator, init_args.restore) },
+        };
     }
 
-    pub fn deinit(self: *Pipeline) void {
-        for (self.regex_list) |r| r.deinit();
-        self.allocator.free(self.regex_list);
-    }
-
-    pub fn run(self: *const Pipeline, args: PipelineArgs) !PipelineResult {
-        switch (self.kind) {
-            .mask => return self.runMask(args.mask),
-            .restore => return self.runRestore(args.restore),
+    pub fn deinit(self: *const Pipeline) void {
+        switch (self.*) {
+            .mask => self.mask.deinit(),
+            .restore => self.restore.deinit(),
         }
     }
 
-    pub fn runMask(self: *const Pipeline, args: MaskArgs) !PipelineResult {
-        if (self.kind != .mask) return error.InvalidPipelineKind;
+    pub fn run(self: *const Pipeline, args: PipelineArgs) !PipelineResult {
+        switch (self.*) {
+            .mask => return self.mask.run(args.mask),
+            .restore => return self.restore.run(args.restore),
+        }
+    }
+};
 
+pub const MaskPipeline = struct {
+    allocator: std.mem.Allocator,
+    // components
+    regex_list: []const RegexRecognizer,
+    ner_recognizer: *const NerRecognizer,
+
+    pub fn init(allocator: std.mem.Allocator, init_args: MaskInitArgs) MaskPipeline {
+        return .{
+            .allocator = allocator,
+            .regex_list = init_args.regex_list,
+            .ner_recognizer = init_args.ner_recognizer,
+        };
+    }
+
+    pub fn deinit(self: *const MaskPipeline) void {
+        for (self.regex_list) |r| r.deinit();
+        self.ner_recognizer.deinit();
+        self.allocator.free(self.regex_list);
+    }
+
+    pub fn run(self: *const MaskPipeline, args: MaskArgs) !PipelineResult {
         // 1) Tokenizer (optional) - skipped
         // 2) Regex recognizers
         var merged = try std.ArrayList(RecogEntity).initCapacity(self.allocator, 4);
         defer merged.deinit(self.allocator);
         // from regex
         for (self.regex_list) |r| {
-            const ents = try r.run(args.original_text);
+            const regex_ents = try r.run(args.original_text);
             // append
-            for (ents) |e| try merged.append(self.allocator, e);
-            self.allocator.free(ents);
+            try merged.appendSlice(self.allocator, regex_ents);
+            self.allocator.free(regex_ents);
         }
         // 3) NER results from args
-        for (args.ner_data) |e| try merged.append(self.allocator, e);
+        const ner_ents = try self.ner_recognizer.run(args.ner_data);
+        try merged.appendSlice(self.allocator, ner_ents);
+        self.allocator.free(ner_ents);
 
         // 4) SpanMerger: sort, dedup by range, filter by score >= 0.5
         const spans = try merged.toOwnedSlice(self.allocator);
@@ -142,12 +181,12 @@ pub const Pipeline = struct {
         var placeholder_dict = try std.ArrayList(PlaceholderMatchedPair).initCapacity(self.allocator, final_spans.len);
         defer placeholder_dict.deinit(self.allocator);
 
-        var cursor: usize = 0;
+        var pos: usize = 0;
         var idx: u32 = 0;
         while (idx < final_spans.len) : (idx += 1) {
             const span_start = final_spans[idx].start;
             const span_end = final_spans[idx].end;
-            if (span_start > cursor) try out_buf.appendSlice(self.allocator, args.original_text[cursor..span_start]);
+            if (span_start > pos) try out_buf.appendSlice(self.allocator, args.original_text[pos..span_start]);
             var ph_buf: [PLACEHOLDER_MAX_LEN]u8 = undefined;
             const ph_text = try writePlaceholder(ph_buf[0..], final_spans[idx].entity_type, idx);
             try out_buf.appendSlice(self.allocator, ph_text);
@@ -156,21 +195,34 @@ pub const Pipeline = struct {
                 .entity_type = final_spans[idx].entity_type,
                 .matched_text = args.original_text[span_start..span_end],
             });
-            cursor = span_end;
+            pos = span_end;
         }
-        if (cursor < args.original_text.len) try out_buf.appendSlice(self.allocator, args.original_text[cursor..]);
+        if (pos < args.original_text.len) try out_buf.appendSlice(self.allocator, args.original_text[pos..]);
 
         return .{
             .mask = .{
                 .masked_text = try out_buf.toOwnedSlice(self.allocator),
-                .mask_meta_data = .{ .placeholder_dict = try placeholder_dict.toOwnedSlice(self.allocator) },
+                .mask_meta_data = .{
+                    .placeholder_dict = try placeholder_dict.toOwnedSlice(self.allocator),
+                },
             },
         };
     }
+};
 
-    pub fn runRestore(self: *const Pipeline, args: RestoreArgs) !PipelineResult {
-        if (self.kind != .restore) return error.InvalidPipelineKind;
+pub const RestorePipeline = struct {
+    allocator: std.mem.Allocator,
 
+    pub fn init(allocator: std.mem.Allocator, init_args: RestoreInitArgs) RestorePipeline {
+        _ = init_args;
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *const RestorePipeline) void {
+        _ = self;
+    }
+
+    pub fn run(self: *const RestorePipeline, args: RestoreArgs) !PipelineResult {
         // naive restore: sequentially replace placeholders with originals in order
         var out = try std.ArrayList(u8).initCapacity(self.allocator, args.masked_text.len);
         defer out.deinit(self.allocator);
@@ -195,12 +247,12 @@ pub const Pipeline = struct {
 
 fn maxPlaceholderLen() comptime_int {
     const fields = std.meta.fields(EntityType);
-    comptime var max_name: usize = 0;
+    comptime var max_name_len: usize = 0;
     inline for (fields) |f| {
-        if (f.name.len > max_name) max_name = f.name.len;
+        if (f.name.len > max_name_len) max_name_len = f.name.len;
     }
     // "__PII_" + name + "_" + 8 hex + "__"
-    return 6 + max_name + 1 + 8 + 2;
+    return 6 + max_name_len + 1 + 8 + 2;
 }
 
 const PLACEHOLDER_MAX_LEN: usize = maxPlaceholderLen();
@@ -209,12 +261,16 @@ fn writePlaceholder(buf: []u8, t: EntityType, serial: u32) ![]u8 {
     return std.fmt.bufPrint(buf, "__PII_{s}_{X:0>8}__", .{ @tagName(t), serial });
 }
 
+pub const SessionInitArgs = struct {
+    ner_recog_type: NerRecognizer.NerRecogType,
+};
+
 pub const Session = struct {
     allocator: std.mem.Allocator,
     mask_pipeline: Pipeline,
     restore_pipeline: Pipeline,
 
-    pub fn init(allocator: std.mem.Allocator) !Session {
+    pub fn init(allocator: std.mem.Allocator, init_args: SessionInitArgs) !Session {
         std.log.info("[core-lib] session init", .{});
         // Build recognizers set (email/url/phone/bank)
         const types = [_]EntityType{ .EMAIL_ADDRESS, .URL_ADDRESS, .PHONE_NUMBER, .BANK_NUMBER };
@@ -228,8 +284,16 @@ pub const Session = struct {
             list.appendAssumeCapacity(r);
         }
         const regex_list = try list.toOwnedSlice(allocator);
-        const mask = Pipeline.init(allocator, .mask, regex_list);
-        const restore = Pipeline.init(allocator, .restore, &[_]RegexRecognizer{});
+        const ner_recognizer = NerRecognizer.init(allocator, init_args.ner_recog_type);
+        const mask = Pipeline.init(allocator, .{
+            .mask = .{
+                .regex_list = regex_list,
+                .ner_recognizer = &ner_recognizer,
+            },
+        });
+        const restore = Pipeline.init(allocator, .{
+            .restore = .{},
+        });
         return .{ .allocator = allocator, .mask_pipeline = mask, .restore_pipeline = restore };
     }
 
@@ -257,11 +321,17 @@ test "session mask/restore" {
         if (deinit_status == .leak) std.log.warn("[core-lib] allocator leak detected", .{});
     }
     const allocator = gpa.allocator();
-    var session = try Session.init(allocator);
+    var session = try Session.init(allocator, .{ .ner_recog_type = .token_classification });
     defer session.deinit();
 
     const input = "Contact me: a.b+1@test.io and visit https://ziglang.org";
-    const args = MaskArgs{ .original_text = input, .ner_data = &[_]RecogEntity{} };
+    const args = MaskArgs{
+        .original_text = input,
+        .ner_data = .{
+            .text = input,
+            .entities = &[_]NerRecognizer.NerRecogEntity{},
+        },
+    };
     const masked = (try session.getPipeline(.mask).run(.{ .mask = args })).mask;
     std.debug.print("masked={s}\n", .{masked.masked_text});
     defer masked.deinit(allocator);
