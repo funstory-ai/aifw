@@ -329,7 +329,8 @@ test "session mask/restore" {
         .original_text = input,
         .ner_data = .{
             .text = input,
-            .entities = &[_]NerRecognizer.NerRecogEntity{},
+            .ner_entities = &[_]NerRecognizer.NerRecogEntity{},
+            .ner_entity_count = 0,
         },
     };
     const masked = (try session.getPipeline(.mask).run(.{ .mask = args })).mask;

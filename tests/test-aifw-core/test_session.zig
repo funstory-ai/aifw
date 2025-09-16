@@ -15,7 +15,8 @@ pub fn main() !void {
             .original_text = input,
             .ner_data = .{
                 .text = input,
-                .entities = &[_]core.NerRecognizer.NerRecogEntity{},
+                .ner_entities = &[_]core.NerRecognizer.NerRecogEntity{},
+                .ner_entity_count = 0,
             },
         },
     })).mask;
