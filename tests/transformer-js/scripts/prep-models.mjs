@@ -420,7 +420,7 @@ async function main() {
   } catch (_) {}
   console.log(`[prep-models] mode: offline=${OFFLINE} strict=${STRICT} allow_remote=${!OFFLINE}`)
   for (const m of SUPPORTED) {
-    console.log(`[prep-models] preparing: ${m.id}`)
+    console.log(`\n[prep-models] preparing: ${m.id}`)
     await prepareModel(m)
   }
 }

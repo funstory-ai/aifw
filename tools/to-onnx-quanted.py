@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 from transformers import AutoTokenizer, AutoConfig, AutoModelForTokenClassification, AutoModelForSequenceClassification
+import json
 
 try:
     from onnxruntime.quantization import quantize_dynamic, QuantType
@@ -109,6 +110,133 @@ def maybe_quantize(src_onnx: Path, dst_onnx: Path, enable: bool) -> None:
         # optimize_model=True,
     )
 
+def ensure_fast_tokenizer(repo_or_dir: str, target_dir: Path) -> bool:
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        tok = AutoTokenizer.from_pretrained(repo_or_dir, use_fast=True, token=os.environ.get("HF_TOKEN"))
+        tok.save_pretrained(target_dir.as_posix())
+        print(f"[tok] saved fast tokenizer to {target_dir}")
+        return True
+    except Exception as e:
+        print(f"[tok] fast load/save failed: {e}")
+        return False
+
+
+def try_build_fast_tokenizer_fallback(repo_or_dir: str, target_dir: Path, tokenizer) -> bool:
+    try:
+        tokenizer_target_json = target_dir / "tokenizer.json"
+        tokenizer_target_vocab = target_dir / "vocab.txt"
+        tokenizer_target_cfg = target_dir / "tokenizer_config.json"
+
+        # Copy vocab.txt if available via slow tokenizer
+        vocab_file = getattr(tokenizer, "vocab_file", None)
+        if vocab_file and os.path.exists(vocab_file):
+            from shutil import copyfile
+            copyfile(vocab_file, tokenizer_target_vocab)
+            print(f"[copy] vocab.txt -> {tokenizer_target_vocab}")
+
+        # Try to fetch tokenizer_config.json from hub
+        try:
+            from transformers.utils.hub import cached_file
+            src_cfg = cached_file(repo_or_dir, "tokenizer_config.json", token=os.environ.get("HF_TOKEN"))
+            if src_cfg and os.path.exists(src_cfg):
+                from shutil import copyfile
+                copyfile(src_cfg, tokenizer_target_cfg)
+                print(f"[copy] tokenizer_config.json -> {tokenizer_target_cfg}")
+        except Exception:
+            pass
+
+        # Detect lowercase from config
+        do_lower_case = False
+        try:
+            if tokenizer_target_cfg.exists():
+                with open(tokenizer_target_cfg, "r", encoding="utf-8") as f:
+                    tcfg = json.load(f)
+                    do_lower_case = bool(tcfg.get("do_lower_case", False))
+        except Exception:
+            pass
+        try:
+            cfg = AutoConfig.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+            do_lower_case = bool(getattr(cfg, "do_lower_case", do_lower_case))
+        except Exception:
+            pass
+
+        # Load special tokens if present
+        special_map = {}
+        try:
+            from transformers.utils.hub import cached_file
+            stm = cached_file(repo_or_dir, "special_tokens_map.json", token=os.environ.get("HF_TOKEN"))
+            if stm and os.path.exists(stm):
+                with open(stm, "r", encoding="utf-8") as f:
+                    special_map = json.load(f) or {}
+        except Exception:
+            special_map = {}
+
+        # Build fast WordPiece tokenizer via tokenizers
+        from tokenizers import Tokenizer
+        from tokenizers.models import WordPiece
+        from tokenizers.normalizers import BertNormalizer
+        from tokenizers.pre_tokenizers import BertPreTokenizer
+        from tokenizers.processors import TemplateProcessing
+
+        if not tokenizer_target_vocab.exists():
+            print("[tok] missing vocab.txt; cannot build fast tokenizer fallback")
+            return False
+
+        try:
+            model_wp = WordPiece.from_file(tokenizer_target_vocab.as_posix(), unk_token=special_map.get("unk_token", "[UNK]"))
+        except Exception:
+            vocab_dict = getattr(tokenizer, "get_vocab", lambda: {})()
+            model_wp = WordPiece(vocab=vocab_dict, unk_token=special_map.get("unk_token", "[UNK]"))
+
+        tok = Tokenizer(model_wp)
+        tok.normalizer = BertNormalizer(
+            clean_text=True,
+            handle_chinese_chars=True,
+            lowercase=do_lower_case,
+            strip_accents=None if do_lower_case else False,
+        )
+        tok.pre_tokenizer = BertPreTokenizer()
+
+        cls = special_map.get("cls_token", "[CLS]")
+        sep = special_map.get("sep_token", "[SEP]")
+        vocab_now = tok.get_vocab()
+        tok.post_processor = TemplateProcessing(
+            single=f"{cls} $A {sep}",
+            pair=f"{cls} $A {sep} $B {sep}",
+            special_tokens=[(cls, vocab_now.get(cls, 101)), (sep, vocab_now.get(sep, 102))],
+        )
+
+        tok.save(tokenizer_target_json.as_posix())
+        print(f"[tok] built fast tokenizer.json -> {tokenizer_target_json}")
+        return True
+    except Exception as e:
+        print(f"[tok] failed to build fast tokenizer.json: {e}")
+        return False
+
+
+def fix_tokenizer_config_fast(target_dir: Path) -> None:
+    cfg_path = target_dir / "tokenizer_config.json"
+    try:
+        if not cfg_path.exists():
+            return
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        klass = str(data.get("tokenizer_class", ""))
+        mapping = {
+            "BertTokenizer": "BertTokenizerFast",
+            "DistilBertTokenizer": "DistilBertTokenizerFast",
+            "RobertaTokenizer": "RobertaTokenizerFast",
+            "AlbertTokenizer": "AlbertTokenizerFast",
+        }
+        new_klass = mapping.get(klass)
+        if new_klass:
+            data["tokenizer_class"] = new_klass
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            print(f"[tok] rewrote tokenizer_class -> {new_klass} in {cfg_path}")
+    except Exception as e:
+        print(f"[tok] fix_tokenizer_config_fast failed: {e}")
 
 def main():
     ap = argparse.ArgumentParser(description="Export HF model to ONNX and optionally quantize/optimize")
@@ -165,26 +293,7 @@ def main():
                 # fallback to sequence classification if token head unavailable
                 model = AutoModelForSequenceClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
 
-    # Ensure required tokenizer/config files are present alongside ONNX model for the browser demo
-    # Prefer fast tokenizer.json if available; else copy vocab.txt
-    try:
-        tok_json = tokenizer.init_kwargs.get("tokenizer_file", None)
-        vocab_file = getattr(tokenizer, "vocab_file", None)
-        tokenizer_target_json = base / "tokenizer.json"
-        tokenizer_target_vocab = base / "vocab.txt"
-        if tok_json and os.path.exists(tok_json):
-            from shutil import copyfile
-            if not tokenizer_target_json.exists():
-                copyfile(tok_json, tokenizer_target_json)
-                print(f"[copy] tokenizer.json -> {tokenizer_target_json}")
-        elif vocab_file and os.path.exists(vocab_file):
-            from shutil import copyfile
-            copyfile(vocab_file, tokenizer_target_vocab)
-            print(f"[copy] vocab.txt -> {tokenizer_target_vocab}")
-    except Exception:
-        pass
-
-    # Copy auxiliary files if they exist in cache
+    # Copy auxiliary files if they exist in cache (redundant-safe)
     try:
         from transformers.utils.hub import cached_file
         for fname in ["tokenizer.json", "vocab.txt", "tokenizer_config.json", "config.json", "special_tokens_map.json"]:
@@ -199,6 +308,18 @@ def main():
                 pass
     except Exception:
         pass
+
+    # Prepare fast tokenizer assets in target directory
+    try:
+        ok_fast = ensure_fast_tokenizer(repo_or_dir, base)
+        if not ok_fast:
+            ok_fast = try_build_fast_tokenizer_fallback(repo_or_dir, base, tokenizer)
+        if not ok_fast:
+            print("[tok] ERROR: fast tokenizer not available; offsets will be unavailable in the browser")
+        else:
+            fix_tokenizer_config_fast(base)
+    except Exception as e:
+        print(f"[tok] tokenizer prep failed: {e}")
 
     # Export ONNX
     onnx_model = onnx_dir / "model.onnx"

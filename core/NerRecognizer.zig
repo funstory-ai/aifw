@@ -167,3 +167,33 @@ fn hasSubwordPrefix(word: []const u8) bool {
     if (word.len >= 2 and word[0] == '#' and word[1] == '#') return true;
     return false;
 }
+
+// ---------------------- offsets computed from frontend tokens ----------------------
+const Offset = struct { start: usize, end: usize };
+
+fn computeOffsetsFromTokens(allocator: std.mem.Allocator, text: []const u8, tokens: [*]const NerToken, token_count: usize) ![]Offset {
+    var out = try std.ArrayList(Offset).initCapacity(allocator, token_count);
+    defer out.deinit(allocator);
+    var cursor: usize = 0;
+    var i: usize = 0;
+    while (i < token_count) : (i += 1) {
+        const tk = tokens[i];
+        const word_full = std.mem.span(tk.word);
+        const w = if (word_full.len >= 2 and word_full[0] == '#' and word_full[1] == '#') word_full[2..] else word_full;
+        if (w.len == 0) {
+            try out.append(.{ .start = cursor, .end = cursor });
+            continue;
+        }
+        var found: ?usize = std.mem.indexOfPos(u8, text, cursor, w);
+        if (found == null) found = std.mem.indexOf(u8, text, w);
+        if (found) |p| {
+            const s = p;
+            const e = p + w.len;
+            try out.append(.{ .start = s, .end = e });
+            cursor = e;
+        } else {
+            try out.append(.{ .start = cursor, .end = cursor });
+        }
+    }
+    return try out.toOwnedSlice(allocator);
+}
