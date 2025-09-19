@@ -2,35 +2,37 @@ const std = @import("std");
 const core = @import("aifw_core");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var session = try core.Session.init(allocator, .{ .ner_recog_type = .token_classification });
-    defer session.deinit();
+    const session = core.aifw_session_create(&.{ .ner_recog_type = .token_classification });
+    defer core.aifw_session_destroy(session);
 
     const input = "Hi, my email is example.test@funstory.com, my phone number is 13800138027";
-    const out_mask = (try session.getPipeline(.mask).run(.{
-        .mask = .{
-            .original_text = input,
-            .ner_data = .{
-                .text = input,
-                .ner_entities = &[_]core.NerRecognizer.NerRecogEntity{},
-                .ner_entity_count = 0,
-            },
-        },
-    })).mask;
-    defer out_mask.deinit(allocator);
+    var masked_text: [*:0]u8 = undefined;
+    var err_no = core.aifw_session_mask(
+        session,
+        input,
+        &[_]core.NerRecognizer.NerRecogEntity{},
+        0,
+        &masked_text,
+    );
+    if (err_no != 0) {
+        std.log.err("failed to mask, error={s}\n", .{core.getErrorString(err_no)});
+        return error.TestFailed;
+    }
+    // defer allocator.free(std.mem.span(masked_text));
 
-    const out_restore = (try session.getPipeline(.restore).run(.{
-        .restore = .{
-            .masked_text = out_mask.masked_text,
-            .mask_meta_data = out_mask.mask_meta_data,
-        },
-    })).restore;
-    defer out_restore.deinit(allocator);
+    var restored_text: [*:0]u8 = undefined;
+    err_no = core.aifw_session_restore(
+        session,
+        masked_text,
+        &restored_text,
+    );
+    if (err_no != 0) {
+        std.log.err("failed to restore, error={s}\n", .{core.getErrorString(err_no)});
+        return error.TestFailed;
+    }
+    // defer allocator.free(std.mem.span(restored_text));
 
     std.debug.print("input_text={s}\n", .{input});
-    std.debug.print("masked_text={s}\n", .{out_mask.masked_text});
-    std.debug.print("restored_text={s}\n", .{out_restore.restored_text});
+    std.debug.print("masked_text={s}\n", .{masked_text});
+    std.debug.print("restored_text={s}\n", .{restored_text});
 }
