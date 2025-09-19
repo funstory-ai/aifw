@@ -164,48 +164,6 @@ runBtn.addEventListener('click', async () => {
 // Auto-run once on load
 runBtn.click();
 
-/**
- * Generate offsets (start, end) for each token based on tokenizer output
- * @param {string} text original input text
- * @param {object} enc tokenizer.encode(text) result
- * @returns {Array<{token: string, start: number|null, end: number|null}>}
- */
-function computeOffsets(text, enc) {
-  const tokens = enc.tokens;
-  const offsets = [];
-
-  let cursor = 0;
-  for (let i = 0; i < tokens.length; i++) {
-    const tok = tokens[i];
-
-    // 特殊 token（[CLS], [SEP] 等）
-    if (enc.special_tokens_mask && enc.special_tokens_mask[i] === 1) {
-      offsets.push({ token: tok, start: null, end: null });
-      continue;
-    }
-
-    // 处理 WordPiece 子词
-    let normTok = tok.startsWith("##") ? tok.slice(2) : tok;
-
-    // 在原始文本中查找 normTok
-    const lowerText = text.toLowerCase();
-    const lowerTok = normTok.toLowerCase();
-    const start = lowerText.indexOf(lowerTok, cursor);
-
-    if (start === -1) {
-      offsets.push({ token: tok, start: null, end: null });
-      continue;
-    }
-
-    const end = start + normTok.length;
-    offsets.push({ token: tok, start, end });
-
-    cursor = end;
-  }
-
-  return offsets;
-}
-
 // Compute offsets from tokens by scanning in original text
 function computeOffsetsFromTokens(text, tokens) {
   const offsets = new Array(tokens.length);
@@ -338,37 +296,6 @@ function findStrippedIndexAtOrAfter(map, origIndex) {
   }
   return lo;
 }
-
-// Decode logits to token classification items (no aggregation)
-// function decodeTokenClassification(logits, tokens, id2label) {
-//   // logits: Tensor with dims [batch, seq, num_labels], batch assumed 1
-//   const dims = logits.dims || [];
-//   const batch = dims[0] || 1;
-//   const seqLen = dims[1] || (tokens ? tokens.length : 0);
-//   const numLabels = dims[2] || 0;
-//   const data = logits.data; // Float32Array length = batch*seq*num_labels
-//   const items = [];
-//   if (batch !== 1 || !numLabels || !data) return items;
-// 
-//   // Build plain tokens list (skip specials via empty decode upstream if needed)
-//   const plainTokens = Array.isArray(tokens) ? tokens.filter(w => w && w !== '[PAD]' && w !== '[CLS]' && w !== '[SEP]') : [];
-// 
-//   for (let j = 0; j < seqLen; j++) {
-//     const base = j * numLabels;
-//     if (base + numLabels > data.length) break;
-//     let maxIdx = 0, maxVal = -Infinity;
-//     for (let k = 0; k < numLabels; k++) {
-//       const v = data[base + k];
-//       if (v > maxVal) { maxVal = v; maxIdx = k; }
-//     }
-//     const entity = id2label ? id2label[maxIdx] : `LABEL_${maxIdx}`;
-//     if (entity === 'O') continue;
-//     const word = tokens && tokens[j] ? String(tokens[j]) : '';
-//     if (!word || word === '[PAD]' || word === '[CLS]' || word === '[SEP]') continue;
-//     items.push({ entity, score: 1, index: j + 1, word, start: null, end: null });
-//   }
-//   return items;
-// }
 
 class TokenClassificationPipeline {
     /**
