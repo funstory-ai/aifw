@@ -500,3 +500,8 @@ pub export fn aifw_session_restore(
     out_restored_text.* = restored_text;
     return 0;
 }
+
+/// Free a NUL-terminated string allocated by the core (masked/restored text)
+pub export fn aifw_string_free(str: [*:0]u8) void {
+    globalAllocator().free(std.mem.span(str));
+}
