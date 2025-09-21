@@ -85,6 +85,9 @@ pub fn build(b: *std.Build) void {
 
     // Tests (native)
     const unit_tests = b.addTest(.{ .root_module = aifw_core_native });
+    // Ensure Rust native staticlib is built before unit tests and link it
+    unit_tests.step.dependOn(&cargo_native.step);
+    unit_tests.addObjectFile(b.path("libs/regex/target/release/libaifw_regex.a"));
     const run_tests = b.addRunArtifact(unit_tests);
 
     const test_step = b.step("test", "Run test-aifw-core");
@@ -102,6 +105,9 @@ pub fn build(b: *std.Build) void {
         .root_module = integ_test_mod,
     });
     integ.root_module.addImport("aifw_core", aifw_core_native);
+    // Ensure Rust native staticlib is built before integration test and link it
+    integ.step.dependOn(&cargo_native.step);
+    integ.addObjectFile(b.path("libs/regex/target/release/libaifw_regex.a"));
     b.installArtifact(integ);
 
     const run_integ = b.addRunArtifact(integ);
