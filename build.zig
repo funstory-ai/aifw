@@ -29,25 +29,55 @@ pub fn build(b: *std.Build) void {
     lib.addObjectFile(b.path("libs/regex/target/release/libaifw_regex.a"));
     b.installArtifact(lib);
 
-    // WASM freestanding static library (for browser)
+    // WASM freestanding module (for browser)
     const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
-    const aifw_core_wasm = b.createModule(.{
+    const aifw_core_wasm_mod = b.createModule(.{
         .root_source_file = b.path("core/aifw_core.zig"),
         .target = wasm_target,
         .optimize = optimize,
     });
-    const wasm = b.addLibrary(.{
-        .name = "oneaifw_core_wasm",
-        .root_module = aifw_core_wasm,
-        .linkage = .static,
+
+    const wasm_exe = b.addExecutable(.{
+        .name = "liboneaifw_core", // will produce liboneaifw_core.wasm
+        .root_module = aifw_core_wasm_mod,
     });
-    wasm.root_module.strip = optimize != .Debug;
-    // Build and link Rust regex (wasm)
+    wasm_exe.root_module.strip = optimize != .Debug;
+    // Ensure required exports are retained in the final WASM
+    wasm_exe.root_module.export_symbol_names = &[_][]const u8{
+        "_start",
+        "aifw_malloc",
+        "aifw_free_sized",
+        "aifw_string_free",
+        "aifw_session_create",
+        "aifw_session_destroy",
+        "aifw_session_mask",
+        "aifw_session_restore",
+    };
+
     const cargo_wasm = b.addSystemCommand(&[_][]const u8{ "cargo", "build", "--release", "--target", "wasm32-unknown-unknown" });
     cargo_wasm.setCwd(b.path("libs/regex"));
-    wasm.step.dependOn(&cargo_wasm.step);
-    wasm.addObjectFile(b.path("libs/regex/target/wasm32-unknown-unknown/release/libaifw_regex.a"));
-    b.installArtifact(wasm);
+
+    // Reduce Rust archive into a single relocatable wasm object to avoid noisy archive members
+    const wasm_regex_a = "libs/regex/target/wasm32-unknown-unknown/release/libaifw_regex.a";
+    // const wasm_regex_o = "libs/regex/target/wasm32-unknown-unknown/release/libaifw_regex.o";
+    // const reduce_cmd = b.addSystemCommand(&[_][]const u8{
+    //     "wasm-ld", "-r", wasm_regex_a, "-o", wasm_regex_o,
+    // });
+    // reduce_cmd.step.dependOn(&cargo_wasm.step);
+
+    // wasm_exe.step.dependOn(&reduce_cmd.step);
+    wasm_exe.addObjectFile(b.path(wasm_regex_a));
+
+    b.installArtifact(wasm_exe);
+
+    // Optional step: create symlink for webapp/public/wasm to zig-out/bin/liboneaifw_core.wasm after build
+    const copy_wasm = b.addSystemCommand(&[_][]const u8{
+        "sh",                                                                                                                                   "-lc",
+        "mkdir -p apps/webapp/public/wasm && ln -sf ../../../../zig-out/bin/liboneaifw_core.wasm apps/webapp/public/wasm/liboneaifw_core.wasm",
+    });
+    copy_wasm.step.dependOn(&wasm_exe.step);
+    const web_step = b.step("web:wasm", "Build liboneaifw_core.wasm and create symlink for it");
+    web_step.dependOn(&copy_wasm.step);
 
     // Tests (native)
     const unit_tests = b.addTest(.{ .root_module = aifw_core_native });

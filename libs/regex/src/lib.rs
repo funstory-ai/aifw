@@ -2,7 +2,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::ffi::{c_char, c_int, c_uchar, c_ulonglong};
+use core::ffi::{c_char, c_int, c_uchar, c_ulong};
 use core::{slice, str};
 
 use regex_automata::meta::{Builder, Regex};
@@ -101,10 +101,10 @@ pub extern "C" fn aifw_regex_free(ptr_re: *mut AifwRegex) {
 pub extern "C" fn aifw_regex_find(
     ptr_re: *mut AifwRegex,
     hay_ptr: *const c_uchar,
-    hay_len: c_ulonglong,
-    start: c_ulonglong,
-    out_start: *mut c_ulonglong,
-    out_end: *mut c_ulonglong,
+    hay_len: c_ulong,
+    start: c_ulong,
+    out_start: *mut c_ulong,
+    out_end: *mut c_ulong,
 ) -> c_int {
     if ptr_re.is_null() || hay_ptr.is_null() || out_start.is_null() || out_end.is_null() {
         return -1;
@@ -116,8 +116,8 @@ pub extern "C" fn aifw_regex_find(
     match re.re.find(sub) {
         Some(m) => {
             unsafe {
-                *out_start = (s + m.start()) as c_ulonglong;
-                *out_end = (s + m.end()) as c_ulonglong;
+                *out_start = (s + m.start()) as c_ulong;
+                *out_end = (s + m.end()) as c_ulong;
             }
             1
         }

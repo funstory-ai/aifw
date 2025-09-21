@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OneAIFW WebApp</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
+      textarea { width: 100%; height: 140px; font-family: monospace; }
+      pre { background: #f7f7f7; padding: 12px; overflow: auto; }
+      .row { margin-bottom: 12px; }
+      button { padding: 8px 16px; }
+      .status { color: #555; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>OneAIFW WebApp</h1>
+    <div class="row">
+      <label for="text">Input text</label>
+      <textarea id="text" placeholder="Type text with PII here..."></textarea>
+    </div>
+    <div class="row">
+      <button id="run">Run (mask + restore)</button>
+      <span class="status" id="status"></span>
+    </div>
+    <div class="row">
+      <h3>Masked</h3>
+      <pre id="masked"></pre>
+    </div>
+    <div class="row">
+      <h3>Restored</h3>
+      <pre id="restored"></pre>
+    </div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

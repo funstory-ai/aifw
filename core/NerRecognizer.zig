@@ -16,7 +16,7 @@ pub const NerRecogData = extern struct {
     /// The array of NER entities
     ner_entities: [*c]const NerRecogEntity,
     /// The count of NER entities
-    ner_entity_count: usize,
+    ner_entity_count: u32,
 };
 
 // pub const TokenOffset = extern struct {

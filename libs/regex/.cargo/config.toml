@@ -1,0 +1,8 @@
+# libs/regex/.cargo/config.toml
+[target.wasm32-unknown-unknown]
+rustflags = [
+  "-Clto=fat",
+  "-Ccodegen-units=1",
+  # tell wasm-ld to generate a relocated single object
+  "-Clink-arg=-Wl,-r",
+]

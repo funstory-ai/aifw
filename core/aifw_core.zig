@@ -181,6 +181,7 @@ pub const MaskPipeline = struct {
 
     pub fn run(self: *const MaskPipeline, args: MaskArgs) !PipelineResult {
         const original_text = std.mem.span(args.original_text);
+        std.log.info("[mask] begin text_len={d}", .{original_text.len});
         // 1) Tokenizer (optional) - skipped
         // 2) Regex recognizers
         var merged = try std.ArrayList(RecogEntity).initCapacity(self.allocator, 4);
@@ -188,18 +189,21 @@ pub const MaskPipeline = struct {
         // from regex
         for (self.regex_list) |r| {
             const regex_ents = try r.run(original_text);
+            std.log.info("[mask] regex ents += {d}", .{regex_ents.len});
             // append
             try merged.appendSlice(self.allocator, regex_ents);
             self.allocator.free(regex_ents);
         }
         // 3) NER results from args
         const ner_ents = try self.ner_recognizer.run(args.ner_data);
+        std.log.info("[mask] ner ents += {d}", .{ner_ents.len});
         try merged.appendSlice(self.allocator, ner_ents);
         self.allocator.free(ner_ents);
 
         // 4) SpanMerger: sort, dedup by range, filter by score >= 0.5
         const spans = try merged.toOwnedSlice(self.allocator);
         defer self.allocator.free(spans);
+        std.log.info("[mask] spans before sort/filter: {d}", .{spans.len});
         std.sort.block(RecogEntity, spans, {}, struct {
             fn lessThan(_: void, a: RecogEntity, b: RecogEntity) bool {
                 return if (a.start == b.start) a.end < b.end else a.start < b.start;
@@ -225,6 +229,7 @@ pub const MaskPipeline = struct {
         }
         const final_spans = try filtered.toOwnedSlice(self.allocator);
         defer self.allocator.free(final_spans);
+        std.log.info("[mask] final spans: {d}", .{final_spans.len});
 
         // 5) Anonymizer: build masked text with placeholders
         var out_buf = try std.ArrayList(u8).initCapacity(self.allocator, original_text.len);
@@ -238,11 +243,13 @@ pub const MaskPipeline = struct {
             const span_start = final_spans[idx].start;
             const span_end = final_spans[idx].end;
             if (span_start > pos) try out_buf.appendSlice(self.allocator, original_text[pos..span_start]);
+
             var ph_buf: [PLACEHOLDER_MAX_LEN]u8 = undefined;
-            const ph_text = try writePlaceholder(ph_buf[0..], final_spans[idx].entity_type, idx);
+            const entity_id = idx + 1;
+            const ph_text = try writePlaceholder(ph_buf[0..], final_spans[idx].entity_type, entity_id);
             try out_buf.appendSlice(self.allocator, ph_text);
             try placeholder_dict.append(self.allocator, .{
-                .entity_id = idx,
+                .entity_id = entity_id,
                 .entity_type = final_spans[idx].entity_type,
                 .matched_text = original_text[span_start..span_end],
             });
@@ -253,6 +260,7 @@ pub const MaskPipeline = struct {
         // add sentinel for masked text
         try out_buf.append(self.allocator, 0);
         const masked_text = try out_buf.toOwnedSlice(self.allocator);
+        std.log.info("[mask] done, out_len={d}, placeholders={d}", .{ masked_text.len, placeholder_dict.items.len });
         return .{
             .mask = .{
                 .masked_text = @as([*:0]u8, @ptrCast(masked_text.ptr)),
@@ -279,6 +287,7 @@ pub const RestorePipeline = struct {
     pub fn run(self: *const RestorePipeline, args: RestoreArgs) !PipelineResult {
         // naive restore: sequentially replace placeholders with originals in order
         const masked_text = std.mem.span(args.masked_text);
+        std.log.info("[restore] begin masked_len={d} placeholders={d}", .{ masked_text.len, args.mask_meta_data.placeholder_dict.len });
         var out = try std.ArrayList(u8).initCapacity(self.allocator, masked_text.len);
         defer out.deinit(self.allocator);
         var pos: usize = 0;
@@ -292,6 +301,8 @@ pub const RestorePipeline = struct {
                     if (ph_pos > pos) try out.appendSlice(self.allocator, masked_text[pos..ph_pos]);
                     try out.appendSlice(self.allocator, item.matched_text);
                     pos = ph_pos + ph_text.len;
+                } else {
+                    std.log.warn("[restore] placeholder not found: entity_id={d}", .{item.entity_id});
                 }
             }
         }
@@ -300,6 +311,7 @@ pub const RestorePipeline = struct {
         // add sentinel for restored text
         try out.append(self.allocator, 0);
         const restored_text = try out.toOwnedSlice(self.allocator);
+        std.log.info("[restore] done, out_len={d}", .{restored_text.len});
         return .{ .restore = .{ .restored_text = @as([*:0]u8, @ptrCast(restored_text.ptr)) } };
     }
 };
@@ -376,7 +388,7 @@ pub const Session = struct {
             .ner_data = .{
                 .text = text,
                 .ner_entities = ner_entities.ptr,
-                .ner_entity_count = ner_entities.len,
+                .ner_entity_count = @intCast(ner_entities.len),
             },
         } })).mask;
         self.mask_meta_data = mask_result.mask_meta_data;
@@ -451,11 +463,14 @@ pub export fn getErrorString(err_no: u16) [*:0]const u8 {
 /// C wrapper for Session
 pub export fn aifw_session_create(init_args: *const SessionInitArgs) *allowzero anyopaque {
     const allocator = globalAllocator();
+    std.log.info("[capi] session_create", .{});
     const session = allocator.create(Session) catch return @ptrFromInt(0);
     session.* = Session.init(allocator, init_args.*) catch {
         allocator.destroy(session);
+        std.log.err("[capi] session_init failed", .{});
         return @ptrFromInt(0);
     };
+    std.log.info("[capi] session_create ok ptr=0x{x}", .{@intFromPtr(session)});
     return session;
 }
 
@@ -463,6 +478,7 @@ pub export fn aifw_session_destroy(session_ptr: *allowzero anyopaque) void {
     if (@intFromPtr(session_ptr) == 0) return;
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
+    std.log.info("[capi] session_destroy ptr=0x{x}", .{@intFromPtr(session)});
     session.deinit();
     globalAllocator().destroy(session);
     globalAllocatorDeinit();
@@ -472,17 +488,19 @@ pub export fn aifw_session_mask(
     session_ptr: *allowzero anyopaque,
     c_text: [*:0]const u8,
     ner_entities: [*c]const NerRecogEntity,
-    ner_entity_count: c_ulonglong,
+    ner_entity_count: u32,
     out_masked_text: *[*:0]u8,
 ) u16 {
     if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
-    const ner_entities_slice = ner_entities[0..@intCast(ner_entity_count)];
+    const ner_entities_slice = if (ner_entity_count > 0) ner_entities[0..@intCast(ner_entity_count)] else &[_]NerRecogEntity{};
     const masked_text = session.mask(c_text, ner_entities_slice) catch |err| {
+        std.log.err("[capi] mask failed: {s}", .{@errorName(err)});
         return @intFromError(err);
     };
     out_masked_text.* = masked_text;
+    std.log.info("[capi] mask ok out_ptr=0x{x}", .{@intFromPtr(masked_text)});
     return 0;
 }
 
@@ -494,14 +512,34 @@ pub export fn aifw_session_restore(
     if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
+    std.log.info("[capi] restore enter len={d}", .{std.mem.len(c_text)});
     const restored_text = session.restore(c_text) catch |err| {
+        std.log.err("[capi] restore failed: {s}", .{@errorName(err)});
         return @intFromError(err);
     };
     out_restored_text.* = restored_text;
+    std.log.info("[capi] restore ok out_ptr=0x{x}", .{@intFromPtr(restored_text)});
     return 0;
 }
 
 /// Free a NUL-terminated string allocated by the core (masked/restored text)
 pub export fn aifw_string_free(str: [*:0]u8) void {
     globalAllocator().free(std.mem.span(str));
+}
+
+// Minimal entry point for wasm32-freestanding executable builds
+pub export fn _start() void {
+    // no-op; JS host calls exported APIs directly
+}
+
+/// WASM host buffer allocation helpers
+pub export fn aifw_malloc(n: usize) [*:0]allowzero u8 {
+    const slice = globalAllocator().alloc(u8, n) catch return @ptrFromInt(0);
+    return @ptrCast(slice.ptr);
+}
+
+pub export fn aifw_free_sized(ptr: [*:0]allowzero u8, n: usize) void {
+    if (@intFromPtr(ptr) == 0) return;
+    const p: [*:0]u8 = @ptrCast(ptr);
+    globalAllocator().free(p[0..n]);
 }
