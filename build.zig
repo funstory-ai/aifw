@@ -58,15 +58,19 @@ pub fn build(b: *std.Build) void {
     cargo_wasm.setCwd(b.path("libs/regex"));
 
     // Reduce Rust archive into a single relocatable wasm object to avoid noisy archive members
-    const wasm_regex_a = "libs/regex/target/wasm32-unknown-unknown/release/libaifw_regex.a";
-    // const wasm_regex_o = "libs/regex/target/wasm32-unknown-unknown/release/libaifw_regex.o";
-    // const reduce_cmd = b.addSystemCommand(&[_][]const u8{
-    //     "wasm-ld", "-r", wasm_regex_a, "-o", wasm_regex_o,
-    // });
-    // reduce_cmd.step.dependOn(&cargo_wasm.step);
+    const extract_cmd = b.addSystemCommand(&[_][]const u8{
+        "sh", "-lc",
+        "set -e\n" ++
+            "cd libs/regex/target/wasm32-unknown-unknown/release\n" ++
+            "rm -f aifw_regex_extracted.o\n" ++
+            "MEMBER=$(llvm-ar t libaifw_regex.a | grep -E 'aifw_regex-.*\\.rcgu\\.o' | head -n1)\n" ++
+            "llvm-ar x libaifw_regex.a \"$MEMBER\"\n" ++
+            "mv \"$MEMBER\" aifw_regex_extracted.o\n",
+    });
+    extract_cmd.step.dependOn(&cargo_wasm.step);
 
-    // wasm_exe.step.dependOn(&reduce_cmd.step);
-    wasm_exe.addObjectFile(b.path(wasm_regex_a));
+    wasm_exe.step.dependOn(&extract_cmd.step);
+    wasm_exe.addObjectFile(b.path("libs/regex/target/wasm32-unknown-unknown/release/aifw_regex_extracted.o"));
 
     b.installArtifact(wasm_exe);
 

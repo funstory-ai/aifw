@@ -12,6 +12,9 @@ export default defineConfig({
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
+    // Keep offline: disable HMR client and file watching polling
+    hmr: false,
+    watch: { usePolling: false },
   },
   optimizeDeps: {
     exclude: [],

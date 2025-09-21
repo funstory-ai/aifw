@@ -10,9 +10,6 @@ crate-type = ["staticlib"]
 [dependencies]
 regex-automata = { version = "0.4", default-features = false, features = ["alloc", "meta", "syntax", "unicode"] }
 
-[target.wasm32-unknown-unknown.dependencies]
-compiler_builtins = { version = "0.1", features = ["mem"] }
-
 [profile.release]
 panic = "abort"
 lto = true
