@@ -88,7 +88,8 @@ async function main() {
       const modelId = 'Xenova/distilbert-base-cased-finetuned-conll03-english';
       const ner = await nerLib.ensurePipeline(modelId, { quantized: true });
       const items = await ner.run(textStr); // [{entity, score, index, word, start, end}]
-      const nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items);
+      console.log('NER items', items);
+      const nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, textStr.length);
 
       // 2) Call mask with NER entities
       const outMaskedPtrPtr = wasm.aifw_malloc(4);
@@ -122,6 +123,8 @@ async function main() {
       statusEl.textContent = `Error: ${e.message || e}`;
     }
   });
+
+  wasm.aifw_shutdown();
 }
 
 main().catch((e) => statusEl.textContent = `Error: ${e.message || e}`);

@@ -71,11 +71,9 @@ pub fn run(self: *const NerRecognizer, ner_data: NerRecogData) ![]RecogEntity {
     std.log.debug("NerRecognizer.run: ner_data.ner_entity_count={d}", .{ner_data.ner_entity_count});
     var out = try std.ArrayList(RecogEntity).initCapacity(self.allocator, ner_data.ner_entity_count);
     defer out.deinit(self.allocator);
-    std.log.debug("NerRecognizer.run: ner_data.text={s}", .{ner_data.text});
     const text = std.mem.span(ner_data.text);
-    std.log.debug("NerRecognizer.run: text={s}", .{text});
     while (idx < ner_data.ner_entity_count) {
-        std.log.debug("NerRecognizer.run: idx={d}, pos={d}", .{ idx, pos });
+        std.log.debug("NerRecognizer.run: ner_data.ner_entities[{d}]={any}", .{ idx, ner_data.ner_entities[idx] });
         const e = aggregateNerRecogEntityToRecogEntity(text, &pos, ner_data.ner_entities, ner_data.ner_entity_count, &idx);
         std.log.debug("ner_recog_entity: ner_entity={any}, score={d}, start={d}, end={d}", .{ e.entity_type, e.score, e.start, e.end });
         if (e.entity_type != .None) {
@@ -119,7 +117,7 @@ fn aggregateNerRecogEntityToRecogEntity(
     while (i < entities_count) : (i += 1) {
         const tok = entities[i];
         const entity_str = std.mem.span(tok.entity);
-        std.log.debug("aggregateNerRecogEntityToRecogEntity: i={d}, entity_str={any}, word={any}", .{ i, entity_str, text[tok.start..tok.end] });
+        std.log.debug("aggregateNerRecogEntityToRecogEntity: i={d}, entity_str={s}, start={d}, end={d}, word={s}", .{ i, entity_str, tok.start, tok.end, text[tok.start..tok.end] });
         const is_begin, const ner_type_str = extractEntityString(entity_str) orelse {
             if (have_entity) break else continue;
         };
@@ -130,7 +128,7 @@ fn aggregateNerRecogEntityToRecogEntity(
 
         if (!have_entity) {
             if (!is_begin) continue;
-            std.log.debug("aggregateNerRecogEntityToRecogEntity: is_begin=true, t={any}", .{ner_type_str});
+            std.log.debug("aggregateNerRecogEntityToRecogEntity: is_begin=true, t={s}", .{ner_type_str});
             have_entity = true;
             recog_entity.entity_type = t;
             recog_entity.start = tok.start;

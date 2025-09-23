@@ -2,6 +2,8 @@ const std = @import("std");
 const core = @import("aifw_core");
 
 pub fn main() !void {
+    defer core.aifw_shutdown();
+
     const session = core.aifw_session_create(&.{ .ner_recog_type = .token_classification });
     if (@intFromPtr(session) == 0) {
         std.log.err("failed to create session\n", .{});

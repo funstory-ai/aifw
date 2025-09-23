@@ -24,16 +24,16 @@ fn logFn(
 ) void {
     if (is_freestanding) {
         var buf: [512]u8 = undefined;
-        const prefix = switch (level) {
-            .err => "[ERR] ",
-            .warn => "[WRN] ",
-            .info => "[INF] ",
-            .debug => "[DBG] ",
-        };
+        // const prefix = switch (level) {
+        //     .err => "[ERR] ",
+        //     .warn => "[WRN] ",
+        //     .info => "[INF] ",
+        //     .debug => "[DBG] ",
+        // };
         var w = std.io.fixedBufferStream(&buf);
         const writer = w.writer();
         // best-effort formatting; ignore errors
-        _ = writer.writeAll(prefix) catch {};
+        // _ = writer.writeAll(prefix) catch {};
         _ = std.fmt.format(writer, format, args) catch {};
         const msg = w.getWritten();
         js_log(@intFromEnum(level), msg.ptr, msg.len);
@@ -181,7 +181,7 @@ pub const MaskPipeline = struct {
 
     pub fn run(self: *const MaskPipeline, args: MaskArgs) !PipelineResult {
         const original_text = std.mem.span(args.original_text);
-        std.log.info("[mask] begin text_len={d}", .{original_text.len});
+        std.log.debug("[mask] ner ents from ner_data: {any}", .{args.ner_data});
         // 1) Tokenizer (optional) - skipped
         // 2) Regex recognizers
         var merged = try std.ArrayList(RecogEntity).initCapacity(self.allocator, 4);
@@ -189,22 +189,21 @@ pub const MaskPipeline = struct {
         // from regex
         for (self.regex_list) |r| {
             const regex_ents = try r.run(original_text);
-            std.log.info("[mask] regex ents += {d}", .{regex_ents.len});
+            std.log.debug("[mask] regex ents += {d}", .{regex_ents.len});
             // append
             try merged.appendSlice(self.allocator, regex_ents);
             self.allocator.free(regex_ents);
         }
         // 3) NER results from args
-        std.log.debug("[mask] ner ents from args: {d}", .{args.ner_data.ner_entity_count});
         const ner_ents = try self.ner_recognizer.run(args.ner_data);
-        std.log.info("[mask] ner ents += {d}", .{ner_ents.len});
+        std.log.debug("[mask] ner ents += {d}", .{ner_ents.len});
         try merged.appendSlice(self.allocator, ner_ents);
         self.allocator.free(ner_ents);
 
         // 4) SpanMerger: sort, dedup by range, filter by score >= 0.5
         const spans = try merged.toOwnedSlice(self.allocator);
         defer self.allocator.free(spans);
-        std.log.info("[mask] spans before sort/filter: {d}", .{spans.len});
+        std.log.debug("[mask] spans before sort/filter: {d}", .{spans.len});
         std.sort.block(RecogEntity, spans, {}, struct {
             fn lessThan(_: void, a: RecogEntity, b: RecogEntity) bool {
                 return if (a.start == b.start) a.end < b.end else a.start < b.start;
@@ -230,7 +229,7 @@ pub const MaskPipeline = struct {
         }
         const final_spans = try filtered.toOwnedSlice(self.allocator);
         defer self.allocator.free(final_spans);
-        std.log.info("[mask] final spans: {d}", .{final_spans.len});
+        std.log.debug("[mask] final spans: {d}", .{final_spans.len});
 
         // 5) Anonymizer: build masked text with placeholders
         var out_buf = try std.ArrayList(u8).initCapacity(self.allocator, original_text.len);
@@ -243,6 +242,11 @@ pub const MaskPipeline = struct {
         while (idx < final_spans.len) : (idx += 1) {
             const span_start = final_spans[idx].start;
             const span_end = final_spans[idx].end;
+            // Strict bounds/validity checks to avoid corrupt spans
+            if (span_end > original_text.len or span_start >= span_end) {
+                std.log.warn("[mask] skip invalid span idx={d} start={d} end={d} len={d}", .{ idx, span_start, span_end, original_text.len });
+                continue;
+            }
             if (span_start > pos) try out_buf.appendSlice(self.allocator, original_text[pos..span_start]);
 
             var ph_buf: [PLACEHOLDER_MAX_LEN]u8 = undefined;
@@ -261,7 +265,7 @@ pub const MaskPipeline = struct {
         // add sentinel for masked text
         try out_buf.append(self.allocator, 0);
         const masked_text = try out_buf.toOwnedSlice(self.allocator);
-        std.log.info("[mask] done, out_len={d}, placeholders={d}", .{ masked_text.len, placeholder_dict.items.len });
+        std.log.debug("[mask] done, out_len={d}, placeholders={d}", .{ masked_text.len, placeholder_dict.items.len });
         return .{
             .mask = .{
                 .masked_text = @as([*:0]u8, @ptrCast(masked_text.ptr)),
@@ -288,7 +292,7 @@ pub const RestorePipeline = struct {
     pub fn run(self: *const RestorePipeline, args: RestoreArgs) !PipelineResult {
         // naive restore: sequentially replace placeholders with originals in order
         const masked_text = std.mem.span(args.masked_text);
-        std.log.info("[restore] begin masked_len={d} placeholders={d}", .{ masked_text.len, args.mask_meta_data.placeholder_dict.len });
+        std.log.debug("[restore] begin masked_len={d} placeholders={d}", .{ masked_text.len, args.mask_meta_data.placeholder_dict.len });
         var out = try std.ArrayList(u8).initCapacity(self.allocator, masked_text.len);
         defer out.deinit(self.allocator);
         var pos: usize = 0;
@@ -312,7 +316,7 @@ pub const RestorePipeline = struct {
         // add sentinel for restored text
         try out.append(self.allocator, 0);
         const restored_text = try out.toOwnedSlice(self.allocator);
-        std.log.info("[restore] done, out_len={d}", .{restored_text.len});
+        std.log.debug("[restore] done, out_len={d}", .{restored_text.len});
         return .{ .restore = .{ .restored_text = @as([*:0]u8, @ptrCast(restored_text.ptr)) } };
     }
 };
@@ -487,7 +491,12 @@ pub export fn getErrorString(err_no: u16) [*:0]const u8 {
     return @errorName(err);
 }
 
-/// C wrapper for Session
+/// ----- C wrapper for Session -----
+/// Call this function before the program exits, and call this function only once.
+pub export fn aifw_shutdown() void {
+    globalAllocatorDeinit();
+}
+
 pub export fn aifw_session_create(init_args: *const SessionInitArgs) *allowzero anyopaque {
     const allocator = globalAllocator();
     std.log.info("[c-api] session_create", .{});
@@ -505,7 +514,6 @@ pub export fn aifw_session_destroy(session_ptr: *allowzero anyopaque) void {
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
     std.log.info("[c-api] session_destroy ptr=0x{x}", .{@intFromPtr(session)});
     session.destroy();
-    globalAllocatorDeinit();
 }
 
 pub export fn aifw_session_mask(
