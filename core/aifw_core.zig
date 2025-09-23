@@ -175,7 +175,7 @@ pub const MaskPipeline = struct {
 
     pub fn deinit(self: *const MaskPipeline) void {
         for (self.regex_list) |r| r.deinit();
-        self.ner_recognizer.deinit();
+        // ner_recognizer is owned by Session; do not deinit here
         self.allocator.free(self.regex_list);
     }
 
@@ -195,6 +195,7 @@ pub const MaskPipeline = struct {
             self.allocator.free(regex_ents);
         }
         // 3) NER results from args
+        std.log.debug("[mask] ner ents from args: {d}", .{args.ner_data.ner_entity_count});
         const ner_ents = try self.ner_recognizer.run(args.ner_data);
         std.log.info("[mask] ner ents += {d}", .{ner_ents.len});
         try merged.appendSlice(self.allocator, ner_ents);
@@ -336,13 +337,25 @@ pub const SessionInitArgs = extern struct {
     ner_recog_type: NerRecogType,
 };
 
+// Here has a self-reference pointer to ner_recognizer, so the session must be allocated by create().
+// If you call init() to initialize the session, you can not copy the session to another variable.
 pub const Session = struct {
     allocator: std.mem.Allocator,
     mask_meta_data: ?MaskMetaData = null,
+    ner_recognizer: NerRecognizer,
     mask_pipeline: Pipeline,
     restore_pipeline: Pipeline,
 
-    pub fn init(allocator: std.mem.Allocator, init_args: SessionInitArgs) !Session {
+    pub fn create(allocator: std.mem.Allocator, init_args: SessionInitArgs) !*Session {
+        std.log.info("[core-lib] session create", .{});
+        var session = try allocator.create(Session);
+        errdefer allocator.destroy(session);
+        try session.init(allocator, init_args);
+        return session;
+    }
+
+    pub fn init(self: *Session, allocator: std.mem.Allocator, init_args: SessionInitArgs) !void {
+        // Deprecated for internal use when storing self-pointers; prefer create().
         std.log.info("[core-lib] session init", .{});
         // Build recognizers set (email/url/phone/bank)
         const types = [_]EntityType{ .EMAIL_ADDRESS, .URL_ADDRESS, .PHONE_NUMBER, .BANK_NUMBER };
@@ -356,22 +369,33 @@ pub const Session = struct {
             list.appendAssumeCapacity(r);
         }
         const regex_list = try list.toOwnedSlice(allocator);
-        const ner_recognizer = NerRecognizer.init(allocator, init_args.ner_recog_type);
-        const mask_pipeline = Pipeline.init(allocator, .{
+
+        // NOTE: Returning by value makes inner self-pointers unstable; use create() instead.
+        self.* = .{
+            .allocator = allocator,
+            .mask_meta_data = null,
+            .ner_recognizer = NerRecognizer.init(allocator, init_args.ner_recog_type),
+            .mask_pipeline = undefined,
+            .restore_pipeline = undefined,
+        };
+        self.mask_pipeline = Pipeline.init(allocator, .{
             .mask = .{
                 .regex_list = regex_list,
-                .ner_recognizer = &ner_recognizer,
+                .ner_recognizer = &self.ner_recognizer,
             },
         });
-        const restore_pipeline = Pipeline.init(allocator, .{
-            .restore = .{},
-        });
-        return .{ .allocator = allocator, .mask_pipeline = mask_pipeline, .restore_pipeline = restore_pipeline };
+        self.restore_pipeline = Pipeline.init(allocator, .{ .restore = .{} });
+    }
+
+    pub fn destroy(self: *Session) void {
+        self.deinit();
+        self.allocator.destroy(self);
     }
 
     pub fn deinit(self: *Session) void {
         self.mask_pipeline.deinit();
         self.restore_pipeline.deinit();
+        self.ner_recognizer.deinit();
         if (self.mask_meta_data) |meta_data| meta_data.deinit(self.allocator);
     }
 
@@ -414,11 +438,14 @@ test "session mask/restore" {
         if (deinit_status == .leak) std.log.warn("[core-lib] allocator leak detected", .{});
     }
     const allocator = gpa.allocator();
-    var session = try Session.init(allocator, .{ .ner_recog_type = .token_classification });
-    defer session.deinit();
+    const session = try Session.create(allocator, .{ .ner_recog_type = .token_classification });
+    defer session.destroy();
 
-    const input = "Contact me: a.b+1@test.io and visit https://ziglang.org";
-    const masked_text = try session.mask(input, &[_]NerRecogEntity{});
+    const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
+    const ner_entities = [_]NerRecogEntity{
+        .{ .entity = "B-PER", .score = 0.98, .index = 10, .start = 68, .end = 77 },
+    };
+    const masked_text = try session.mask(input, &ner_entities);
     std.debug.print("masked={s}\n", .{masked_text});
     defer allocator.free(std.mem.span(masked_text));
 
@@ -463,14 +490,12 @@ pub export fn getErrorString(err_no: u16) [*:0]const u8 {
 /// C wrapper for Session
 pub export fn aifw_session_create(init_args: *const SessionInitArgs) *allowzero anyopaque {
     const allocator = globalAllocator();
-    std.log.info("[capi] session_create", .{});
-    const session = allocator.create(Session) catch return @ptrFromInt(0);
-    session.* = Session.init(allocator, init_args.*) catch {
-        allocator.destroy(session);
-        std.log.err("[capi] session_init failed", .{});
+    std.log.info("[c-api] session_create", .{});
+    const session = Session.create(allocator, init_args.*) catch {
+        std.log.err("[c-api] session_init failed", .{});
         return @ptrFromInt(0);
     };
-    std.log.info("[capi] session_create ok ptr=0x{x}", .{@intFromPtr(session)});
+    std.log.info("[c-api] session_create ok ptr=0x{x}", .{@intFromPtr(session)});
     return session;
 }
 
@@ -478,9 +503,8 @@ pub export fn aifw_session_destroy(session_ptr: *allowzero anyopaque) void {
     if (@intFromPtr(session_ptr) == 0) return;
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
-    std.log.info("[capi] session_destroy ptr=0x{x}", .{@intFromPtr(session)});
-    session.deinit();
-    globalAllocator().destroy(session);
+    std.log.info("[c-api] session_destroy ptr=0x{x}", .{@intFromPtr(session)});
+    session.destroy();
     globalAllocatorDeinit();
 }
 
@@ -496,11 +520,11 @@ pub export fn aifw_session_mask(
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
     const ner_entities_slice = if (ner_entity_count > 0) ner_entities[0..@intCast(ner_entity_count)] else &[_]NerRecogEntity{};
     const masked_text = session.mask(c_text, ner_entities_slice) catch |err| {
-        std.log.err("[capi] mask failed: {s}", .{@errorName(err)});
+        std.log.err("[c-api] mask failed: {s}", .{@errorName(err)});
         return @intFromError(err);
     };
     out_masked_text.* = masked_text;
-    std.log.info("[capi] mask ok out_ptr=0x{x}", .{@intFromPtr(masked_text)});
+    std.log.info("[c-api] mask ok out_ptr=0x{x}", .{@intFromPtr(masked_text)});
     return 0;
 }
 
@@ -512,13 +536,13 @@ pub export fn aifw_session_restore(
     if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
-    std.log.info("[capi] restore enter len={d}", .{std.mem.len(c_text)});
+    std.log.info("[c-api] restore enter len={d}", .{std.mem.len(c_text)});
     const restored_text = session.restore(c_text) catch |err| {
-        std.log.err("[capi] restore failed: {s}", .{@errorName(err)});
+        std.log.err("[c-api] restore failed: {s}", .{@errorName(err)});
         return @intFromError(err);
     };
     out_restored_text.* = restored_text;
-    std.log.info("[capi] restore ok out_ptr=0x{x}", .{@intFromPtr(restored_text)});
+    std.log.info("[c-api] restore ok out_ptr=0x{x}", .{@intFromPtr(restored_text)});
     return 0;
 }
 

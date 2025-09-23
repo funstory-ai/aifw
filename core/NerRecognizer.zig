@@ -41,6 +41,17 @@ pub const NerRecogEntity = extern struct {
     end: usize,
 };
 
+pub fn create(allocator: std.mem.Allocator, ner_recog_type: NerRecogType) !*NerRecognizer {
+    const ner_recognizer = allocator.create(NerRecognizer) catch return error.NerRecognizerCreateFailed;
+    ner_recognizer.* = init(allocator, ner_recog_type);
+    return ner_recognizer;
+}
+
+pub fn destroy(self: *const NerRecognizer) void {
+    self.deinit();
+    self.allocator.destroy(self);
+}
+
 pub fn init(allocator: std.mem.Allocator, ner_recog_type: NerRecogType) NerRecognizer {
     return .{ .allocator = allocator, .ner_recog_type = ner_recog_type };
 }
@@ -57,11 +68,16 @@ pub fn deinit(self: *const NerRecognizer) void {
 pub fn run(self: *const NerRecognizer, ner_data: NerRecogData) ![]RecogEntity {
     var pos: usize = 0;
     var idx: usize = 0;
+    std.log.debug("NerRecognizer.run: ner_data.ner_entity_count={d}", .{ner_data.ner_entity_count});
     var out = try std.ArrayList(RecogEntity).initCapacity(self.allocator, ner_data.ner_entity_count);
     defer out.deinit(self.allocator);
+    std.log.debug("NerRecognizer.run: ner_data.text={s}", .{ner_data.text});
     const text = std.mem.span(ner_data.text);
+    std.log.debug("NerRecognizer.run: text={s}", .{text});
     while (idx < ner_data.ner_entity_count) {
+        std.log.debug("NerRecognizer.run: idx={d}, pos={d}", .{ idx, pos });
         const e = aggregateNerRecogEntityToRecogEntity(text, &pos, ner_data.ner_entities, ner_data.ner_entity_count, &idx);
+        std.log.debug("ner_recog_entity: ner_entity={any}, score={d}, start={d}, end={d}", .{ e.entity_type, e.score, e.start, e.end });
         if (e.entity_type != .None) {
             try out.append(self.allocator, .{
                 .entity_type = e.entity_type,
@@ -99,9 +115,11 @@ fn aggregateNerRecogEntityToRecogEntity(
     var have_entity = false;
     var recog_entity: RecogEntity = none_recog_entity;
 
+    std.log.debug("aggregateNerRecogEntityToRecogEntity: entities_count={d}, idx={d}, pos={d}", .{ entities_count, i, pos.* });
     while (i < entities_count) : (i += 1) {
         const tok = entities[i];
         const entity_str = std.mem.span(tok.entity);
+        std.log.debug("aggregateNerRecogEntityToRecogEntity: i={d}, entity_str={any}, word={any}", .{ i, entity_str, text[tok.start..tok.end] });
         const is_begin, const ner_type_str = extractEntityString(entity_str) orelse {
             if (have_entity) break else continue;
         };
@@ -112,6 +130,7 @@ fn aggregateNerRecogEntityToRecogEntity(
 
         if (!have_entity) {
             if (!is_begin) continue;
+            std.log.debug("aggregateNerRecogEntityToRecogEntity: is_begin=true, t={any}", .{ner_type_str});
             have_entity = true;
             recog_entity.entity_type = t;
             recog_entity.start = tok.start;
@@ -128,24 +147,29 @@ fn aggregateNerRecogEntityToRecogEntity(
 
         const score = (recog_entity.score + tok.score) / 2;
         if (!is_begin) {
+            std.log.debug("aggregateNerRecogEntityToRecogEntity: is_begin=false, score={d}", .{score});
             recog_entity.end = tok.end;
             recog_entity.score = score;
             recog_entity.description = null;
         } else if (hasSubwordPrefix(text[tok.start..tok.end])) {
+            std.log.debug("aggregateNerRecogEntityToRecogEntity: is_begin=true, hasSubwordPrefix=true, score={d}", .{score});
             recog_entity.end = tok.end;
             recog_entity.score = score;
             recog_entity.description = null;
         } else {
             // another same type entity is found, break the loop
+            std.log.debug("aggregateNerRecogEntityToRecogEntity: is_begin=true, hasSubwordPrefix=false, score={d}", .{score});
             break;
         }
     }
 
     idx.* = i;
     if (!have_entity) {
+        std.log.debug("aggregateNerRecogEntityToRecogEntity: !have_entity, pos={d}", .{pos.*});
         pos.* = text.len;
         return none_recog_entity;
     }
+    std.log.debug("aggregateNerRecogEntityToRecogEntity: return recog_entity, pos={d}", .{pos.*});
     return recog_entity;
 }
 

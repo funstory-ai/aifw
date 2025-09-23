@@ -6,6 +6,9 @@ const runBtn = document.getElementById('run');
 
 let wasm; // wasm instance exports
 
+// Import NER shared lib dynamically (works in MPA Vite)
+let nerLib;
+
 // Minimal imports with js_log for Zig std.log
 const imports = {
   env: {
@@ -22,7 +25,6 @@ const imports = {
 
 async function loadWasm() {
   statusEl.textContent = 'Loading core...';
-  // wasm is served from public/wasm
   const resp = await fetch('/wasm/liboneaifw_core.wasm');
   if (!resp.ok) throw new Error(`fetch wasm failed: ${resp.status}`);
   const bytes = await resp.arrayBuffer();
@@ -60,8 +62,10 @@ function freeBuf(ptr, size) {
 
 async function main() {
   await loadWasm();
+  nerLib = await import('/@fs/Users/liuchangsheng/Work/funstory-ai/OneAIFW/libs/aifw-ner-js/lib.js');
+  nerLib.initEnv({ wasmBase: '/wasm/' });
 
-  runBtn.addEventListener('click', () => {
+  runBtn.addEventListener('click', async () => {
     try {
       statusEl.textContent = 'Running...';
       maskedEl.textContent = '';
@@ -80,15 +84,21 @@ async function main() {
       const textStr = textEl.value || '';
       const text = allocZstrFromJs(textStr);
 
-      // Call mask (no external NER: pass empty slice)
+      // 1) Run NER via shared lib and build WASM buffer for Zig core
+      const modelId = 'Xenova/distilbert-base-cased-finetuned-conll03-english';
+      const ner = await nerLib.ensurePipeline(modelId, { quantized: true });
+      const items = await ner.run(textStr); // [{entity, score, index, word, start, end}]
+      const nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items);
+
+      // 2) Call mask with NER entities
       const outMaskedPtrPtr = wasm.aifw_malloc(4);
-      const rcMask = wasm.aifw_session_mask(sess, text.ptr, 0, 0, outMaskedPtrPtr);
+      const rcMask = wasm.aifw_session_mask(sess, text.ptr, nerBuf.ptr, nerBuf.count >>> 0, outMaskedPtrPtr);
       if (rcMask !== 0) throw new Error(`mask failed rc=${rcMask}`);
       const maskedPtr = new DataView(wasm.memory.buffer).getUint32(outMaskedPtrPtr, true);
       const maskedStr = readZstr(maskedPtr);
       maskedEl.textContent = maskedStr;
 
-      // Call restore
+      // 3) Call restore
       const outRestoredPtrPtr = wasm.aifw_malloc(4);
       const rcRestore = wasm.aifw_session_restore(sess, maskedPtr, outRestoredPtrPtr);
       if (rcRestore !== 0) throw new Error(`restore failed rc=${rcRestore}`);
@@ -102,6 +112,8 @@ async function main() {
       freeBuf(outMaskedPtrPtr, 4);
       freeBuf(outRestoredPtrPtr, 4);
       freeBuf(text.ptr, text.size);
+      if (nerBuf.ptr) freeBuf(nerBuf.ptr, nerBuf.byteSize);
+      for (const s of nerBuf.owned) freeBuf(s.ptr, s.size);
       freeBuf(initAlloc, initBuf.length);
       wasm.aifw_session_destroy(sess);
 

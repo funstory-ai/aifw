@@ -12,5 +12,8 @@ target
 
 ner-models
 
-tests/transformer-js/node_modules
+package-lock.json
+node_modules
 tests/transformer-js/public
+apps/webapp/public
+
