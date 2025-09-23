@@ -84,7 +84,7 @@ export class TokenClassificationPipeline {
   }
 }
 
-export async function ensurePipeline(modelId, { quantized = true, preferWebGPU = true } = {}) {
+export async function buildNerPipeline(modelId, { quantized = true, preferWebGPU = true } = {}) {
   if (!SUPPORTED.has(modelId)) throw new Error(`Unsupported model: ${modelId}`);
   const base = localDirFor(modelId);
   const modelPath = `${base}`;

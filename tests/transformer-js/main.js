@@ -1,4 +1,4 @@
-import { initEnv, ensurePipeline } from '/@fs/Users/liuchangsheng/Work/funstory-ai/OneAIFW/libs/aifw-ner-js/lib.js';
+import { initEnv, buildNerPipeline } from '/@fs/Users/liuchangsheng/Work/funstory-ai/OneAIFW/libs/aifw-js/libner.js';
 
 // Configure environment
 initEnv({ wasmBase: '/wasm/' });
@@ -15,7 +15,7 @@ runBtn.addEventListener('click', async () => {
     const quantized = !!quantizedEl.checked;
     const text = textEl.value || '';
 
-    const ner = await ensurePipeline(modelId, { quantized });
+    const ner = await buildNerPipeline(modelId, { quantized });
     const t0 = performance.now();
     const output = await ner.run(text);
     const timeMs = Math.round(performance.now() - t0);
