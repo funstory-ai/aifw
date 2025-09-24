@@ -13,6 +13,7 @@ target
 ner-models
 
 package-lock.json
+pnpm-lock.yaml
 node_modules
 dist
 tests/transformer-js/public

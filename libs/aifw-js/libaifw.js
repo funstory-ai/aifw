@@ -27,23 +27,29 @@ function freeBuf(ptr, size) {
   wasm.aifw_free_sized(ptr, size);
 }
 
-// Minimal imports with js_log for Zig std.log
-const imports = {
-  env: {
-    js_log(level, ptr, len) {
-      try {
-        const bytes = new Uint8Array(wasm.memory.buffer, ptr, len);
-        const msg = new TextDecoder().decode(bytes);
-        const tag = ["ERR", "WRN", "INF", "DBG"][level] || "LOG";
-        console.log(`[aifw_core:${tag}]`, msg);
-      } catch (_) {}
+async function loadAifwCore(wasmBase) {
+  const imports = {
+    env: {
+      js_log(level, ptr, len) {
+        try {
+          const mem = new Uint8Array(wasm.memory?.buffer || new ArrayBuffer(0));
+          const view = new Uint8Array(mem.buffer, ptr, len);
+          const msg = new TextDecoder().decode(view);
+          const tag = ["ERR", "WRN", "INF", "DBG"][level] || "LOG";
+          console.log(`[aifw_core:${tag}]`, msg);
+        } catch (_) {}
+      },
     },
-  },
-};
-
-async function loadAifwCore() {
-  const resp = await fetch('/wasm/liboneaifw_core.wasm');
-  if (!resp.ok) throw new Error(`fetch wasm failed: ${resp.status}`);
+  };
+  let urlStr;
+  if (wasmBase) {
+    const base = wasmBase.endsWith('/') ? wasmBase : wasmBase + '/';
+    urlStr = base + 'liboneaifw_core.wasm';
+  } else {
+    urlStr = new URL(/* @vite-ignore */ './wasm/liboneaifw_core.wasm', import.meta.url).toString();
+  }
+  const resp = await fetch(urlStr);
+  if (!resp.ok) throw new Error(`fetch core wasm failed: ${resp.status}`);
   const bytes = await resp.arrayBuffer();
   const { instance } = await WebAssembly.instantiate(bytes, imports);
   const wasm_exports = instance.exports;
@@ -54,10 +60,10 @@ async function loadAifwCore() {
 }
 
 export async function init({ wasmBase = '/wasm/' }) {
-  // wire wasm exports from host
-  wasm = await loadAifwCore();
-  // load NER lib and pipeline
-  nerLib = await import('/@fs/Users/liuchangsheng/Work/funstory-ai/OneAIFW/libs/aifw-js/libner.js');
+  // wire wasm exports from host or auto-load
+  wasm = await loadAifwCore(wasmBase);
+  // load NER lib and pipeline (relative import for packaged lib)
+  nerLib = await import('./libner.js');
   nerLib.initEnv({ wasmBase });
   const modelId = 'Xenova/distilbert-base-cased-finetuned-conll03-english';
   ner = await nerLib.buildNerPipeline(modelId, { quantized: true });

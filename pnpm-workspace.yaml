@@ -1,0 +1,4 @@
+packages:
+  - apps/webapp
+  - tests/transformer-js
+  - libs/aifw-js

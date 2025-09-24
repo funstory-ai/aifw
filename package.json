@@ -1,0 +1,12 @@
+{
+  "name": "oneaifw-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@8.15.4",
+  "scripts": {
+    "build:zig": "zig build -Doptimize=Debug web:wasm",
+    "build:lib": "pnpm --filter @oneaifw/aifw-js build",
+    "build": "pnpm build:zig && pnpm build:lib"
+  }
+}
