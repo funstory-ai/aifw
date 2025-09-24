@@ -110,10 +110,15 @@ def maybe_quantize(src_onnx: Path, dst_onnx: Path, enable: bool) -> None:
         # optimize_model=True,
     )
 
-def ensure_fast_tokenizer(repo_or_dir: str, target_dir: Path) -> bool:
+def ensure_fast_tokenizer(repo_or_dir: str, target_dir: Path, local_only: bool) -> bool:
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        tok = AutoTokenizer.from_pretrained(repo_or_dir, use_fast=True, token=os.environ.get("HF_TOKEN"))
+        tok = AutoTokenizer.from_pretrained(
+            repo_or_dir,
+            use_fast=True,
+            token=os.environ.get("HF_TOKEN"),
+            local_files_only=local_only,
+        )
         tok.save_pretrained(target_dir.as_posix())
         print(f"[tok] saved fast tokenizer to {target_dir}")
         return True
@@ -122,27 +127,36 @@ def ensure_fast_tokenizer(repo_or_dir: str, target_dir: Path) -> bool:
         return False
 
 
-def try_build_fast_tokenizer_fallback(repo_or_dir: str, target_dir: Path, tokenizer) -> bool:
+def try_build_fast_tokenizer_fallback(repo_or_dir: str, target_dir: Path, tokenizer, local_dir: Path | None) -> bool:
     try:
         tokenizer_target_json = target_dir / "tokenizer.json"
         tokenizer_target_vocab = target_dir / "vocab.txt"
         tokenizer_target_cfg = target_dir / "tokenizer_config.json"
 
-        # Copy vocab.txt if available via slow tokenizer
+        # Copy vocab.txt if available via slow tokenizer or local dir
         vocab_file = getattr(tokenizer, "vocab_file", None)
         if vocab_file and os.path.exists(vocab_file):
             from shutil import copyfile
             copyfile(vocab_file, tokenizer_target_vocab)
             print(f"[copy] vocab.txt -> {tokenizer_target_vocab}")
+        elif local_dir and (local_dir / "vocab.txt").exists():
+            from shutil import copyfile
+            copyfile(local_dir / "vocab.txt", tokenizer_target_vocab)
+            print(f"[copy] vocab.txt -> {tokenizer_target_vocab}")
 
-        # Try to fetch tokenizer_config.json from hub
+        # Try to locate tokenizer_config.json locally first; else fetch from hub
         try:
-            from transformers.utils.hub import cached_file
-            src_cfg = cached_file(repo_or_dir, "tokenizer_config.json", token=os.environ.get("HF_TOKEN"))
-            if src_cfg and os.path.exists(src_cfg):
+            if local_dir and (local_dir / "tokenizer_config.json").exists():
                 from shutil import copyfile
-                copyfile(src_cfg, tokenizer_target_cfg)
+                copyfile(local_dir / "tokenizer_config.json", tokenizer_target_cfg)
                 print(f"[copy] tokenizer_config.json -> {tokenizer_target_cfg}")
+            else:
+                from transformers.utils.hub import cached_file
+                src_cfg = cached_file(repo_or_dir, "tokenizer_config.json", token=os.environ.get("HF_TOKEN"))
+                if src_cfg and os.path.exists(src_cfg):
+                    from shutil import copyfile
+                    copyfile(src_cfg, tokenizer_target_cfg)
+                    print(f"[copy] tokenizer_config.json -> {tokenizer_target_cfg}")
         except Exception:
             pass
 
@@ -156,7 +170,7 @@ def try_build_fast_tokenizer_fallback(repo_or_dir: str, target_dir: Path, tokeni
         except Exception:
             pass
         try:
-            cfg = AutoConfig.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+            cfg = AutoConfig.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"), local_files_only=bool(local_dir))
             do_lower_case = bool(getattr(cfg, "do_lower_case", do_lower_case))
         except Exception:
             pass
@@ -164,11 +178,15 @@ def try_build_fast_tokenizer_fallback(repo_or_dir: str, target_dir: Path, tokeni
         # Load special tokens if present
         special_map = {}
         try:
-            from transformers.utils.hub import cached_file
-            stm = cached_file(repo_or_dir, "special_tokens_map.json", token=os.environ.get("HF_TOKEN"))
-            if stm and os.path.exists(stm):
-                with open(stm, "r", encoding="utf-8") as f:
+            if local_dir and (local_dir / "special_tokens_map.json").exists():
+                with open(local_dir / "special_tokens_map.json", "r", encoding="utf-8") as f:
                     special_map = json.load(f) or {}
+            else:
+                from transformers.utils.hub import cached_file
+                stm = cached_file(repo_or_dir, "special_tokens_map.json", token=os.environ.get("HF_TOKEN"))
+                if stm and os.path.exists(stm):
+                    with open(stm, "r", encoding="utf-8") as f:
+                        special_map = json.load(f) or {}
         except Exception:
             special_map = {}
 
@@ -242,7 +260,7 @@ def main():
     ap = argparse.ArgumentParser(description="Export HF model to ONNX and optionally quantize/optimize")
     ap.add_argument("--model", help="HF repo id (e.g., gagan3012/bert-tiny-finetuned-ner) or local dir.")
     ap.add_argument("--out-dir", default="ner-models", help="Output base directory (default: ner-models)")
-    ap.add_argument("--name", default=None, help="Subdir name under out-dir; defaults to repo id")
+    ap.add_argument("--name", default=None, help="Subdir name under out-dir; defaults to repo id or local folder name")
     ap.add_argument("--no-quant", action="store_true", help="Disable dynamic INT8 quantization")
     ap.add_argument("--task", choices=["token-classification", "sequence-classification"], default=None, help="Task head to export (auto-detect if omitted)")
     ap.add_argument("--opt", action="store_true", help="Apply ONNX graph optimization (simplifier)")
@@ -253,7 +271,8 @@ def main():
         ap.error("--model is required")
 
     repo_or_dir = args.model
-    subdir = args.name or repo_or_dir
+    is_local = Path(repo_or_dir).exists()
+    subdir = args.name or (Path(repo_or_dir).name if is_local else repo_or_dir)
     base = Path(args.out_dir).resolve() / subdir
     # Ensure we export directly into the expected public models target
     onnx_dir = base / "onnx"
@@ -261,19 +280,22 @@ def main():
 
     # Load model/tokenizer (supports local dir)
     print(f"[load] {repo_or_dir}")
-    # Pass through HF env/proxy automatically; users can set HF_TOKEN/HF_ENDPOINT/HTTP(S)_PROXY
-    tokenizer = AutoTokenizer.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+    tokenizer = AutoTokenizer.from_pretrained(
+        repo_or_dir,
+        token=os.environ.get("HF_TOKEN"),
+        local_files_only=is_local,
+    )
     model = None
     if args.task:
         if args.task == "token-classification":
-            model = AutoModelForTokenClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+            model = AutoModelForTokenClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"), local_files_only=is_local)
         else:
-            model = AutoModelForSequenceClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+            model = AutoModelForSequenceClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"), local_files_only=is_local)
     else:
         # auto-detect by config architectures when possible
         cfg = None
         try:
-            cfg = AutoConfig.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+            cfg = AutoConfig.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"), local_files_only=is_local)
         except Exception:
             cfg = None
         archs = [a.lower() for a in (getattr(cfg, "architectures", []) or [])]
@@ -284,36 +306,46 @@ def main():
             if "sequenceclassification" in a or "sequence_classification" in a:
                 picked = "sequence-classification"; break
         if picked == "sequence-classification":
-            model = AutoModelForSequenceClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+            model = AutoModelForSequenceClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"), local_files_only=is_local)
         else:
             # default to token-classification (works for NER models)
             try:
-                model = AutoModelForTokenClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+                model = AutoModelForTokenClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"), local_files_only=is_local)
             except Exception:
                 # fallback to sequence classification if token head unavailable
-                model = AutoModelForSequenceClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"))
+                model = AutoModelForSequenceClassification.from_pretrained(repo_or_dir, token=os.environ.get("HF_TOKEN"), local_files_only=is_local)
 
-    # Copy auxiliary files if they exist in cache (redundant-safe)
+    # Copy auxiliary files
     try:
-        from transformers.utils.hub import cached_file
-        for fname in ["tokenizer.json", "vocab.txt", "tokenizer_config.json", "config.json", "special_tokens_map.json"]:
-            try:
-                src = cached_file(repo_or_dir, fname, token=os.environ.get("HF_TOKEN"))
-                if src and os.path.exists(src):
+        if is_local:
+            # Copy directly from local dir if present
+            for fname in ["tokenizer.json", "vocab.txt", "tokenizer_config.json", "config.json", "special_tokens_map.json"]:
+                src = Path(repo_or_dir) / fname
+                if src.exists():
                     from shutil import copyfile
                     dst = base / fname
                     copyfile(src, dst)
                     print(f"[copy] {fname} -> {dst}")
-            except Exception:
-                pass
+        else:
+            from transformers.utils.hub import cached_file
+            for fname in ["tokenizer.json", "vocab.txt", "tokenizer_config.json", "config.json", "special_tokens_map.json"]:
+                try:
+                    src = cached_file(repo_or_dir, fname, token=os.environ.get("HF_TOKEN"))
+                    if src and os.path.exists(src):
+                        from shutil import copyfile
+                        dst = base / fname
+                        copyfile(src, dst)
+                        print(f"[copy] {fname} -> {dst}")
+                except Exception:
+                    pass
     except Exception:
         pass
 
     # Prepare fast tokenizer assets in target directory
     try:
-        ok_fast = ensure_fast_tokenizer(repo_or_dir, base)
+        ok_fast = ensure_fast_tokenizer(repo_or_dir, base, local_only=is_local)
         if not ok_fast:
-            ok_fast = try_build_fast_tokenizer_fallback(repo_or_dir, base, tokenizer)
+            ok_fast = try_build_fast_tokenizer_fallback(repo_or_dir, base, tokenizer, Path(repo_or_dir) if is_local else None)
         if not ok_fast:
             print("[tok] ERROR: fast tokenizer not available; offsets will be unavailable in the browser")
         else:

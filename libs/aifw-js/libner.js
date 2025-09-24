@@ -12,7 +12,7 @@ export const SUPPORTED = new Set([
   'Xenova/distilbert-base-cased-finetuned-conll03-english',
   'gagan3012/bert-tiny-finetuned-ner',
   'dslim/distilbert-NER',
-  'Mozilla/mobilebert-uncased-finetuned-LoRA-intent-classifier',
+  'funstory-ai/neurobert-mini',
   'boltuix/NeuroBERT-Mini',
   'dmis-lab/TinyPubMedBERT-v1.0',
   'mrm8488/TinyBERT-spanish-uncased-finetuned-ner',
