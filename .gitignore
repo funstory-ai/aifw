@@ -14,6 +14,7 @@ ner-models
 
 package-lock.json
 node_modules
+dist
 tests/transformer-js/public
 apps/webapp/public
 
