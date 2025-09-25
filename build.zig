@@ -74,14 +74,9 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(wasm_exe);
 
-    // Optional step: create symlink for webapp/public/wasm to zig-out/bin/liboneaifw_core.wasm after build
-    const copy_wasm = b.addSystemCommand(&[_][]const u8{
-        "sh",                                                                                                                                   "-lc",
-        "mkdir -p apps/webapp/public/wasm && ln -sf ../../../../zig-out/bin/liboneaifw_core.wasm apps/webapp/public/wasm/liboneaifw_core.wasm",
-    });
-    copy_wasm.step.dependOn(&wasm_exe.step);
-    const web_step = b.step("web:wasm", "Build liboneaifw_core.wasm and create symlink for it");
-    web_step.dependOn(&copy_wasm.step);
+    // Build liboneaifw_core.wasm only (no symlink into webapp; packaged via aifw-js)
+    const web_step = b.step("web:wasm", "Build liboneaifw_core.wasm for packaging");
+    web_step.dependOn(&wasm_exe.step);
 
     // Tests (native)
     const unit_tests = b.addTest(.{ .root_module = aifw_core_native });

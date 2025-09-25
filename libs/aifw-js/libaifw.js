@@ -59,12 +59,16 @@ async function loadAifwCore(wasmBase) {
   return wasm_exports;
 }
 
-export async function init({ wasmBase = '/wasm/' }) {
+export async function init({ wasmBase = '/wasm/', modelsBase = '/models/' }) {
   // wire wasm exports from host or auto-load
   wasm = await loadAifwCore(wasmBase);
   // load NER lib and pipeline (relative import for packaged lib)
   nerLib = await import('./libner.js');
-  nerLib.initEnv({ wasmBase });
+
+  // Force SIMD on, and set threads from hardwareConcurrency (>=1)
+  const threads = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) ? Math.max(1, navigator.hardwareConcurrency) : 1;
+  nerLib.initEnv({ wasmBase, modelsBase, threads, simd: true });
+
   const modelId = 'Xenova/distilbert-base-cased-finetuned-conll03-english';
   ner = await nerLib.buildNerPipeline(modelId, { quantized: true });
 }

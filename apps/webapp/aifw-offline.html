@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OneAIFW Offline</title>
+    <link rel="icon" href="data:," />
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
+      textarea { width: 100%; height: 140px; font-family: monospace; }
+      pre { background: #f7f7f7; padding: 12px; overflow: auto; }
+      .row { margin-bottom: 12px; }
+      button { padding: 8px 16px; }
+      .status { color: #555; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>OneAIFW Offline</h1>
+    <div class="row">
+      <label for="text">Input text</label>
+      <textarea id="text" placeholder="Type text with PII here..."></textarea>
+    </div>
+    <div class="row">
+      <button id="run">Run (mask + restore)</button>
+      <span class="status" id="status"></span>
+    </div>
+    <div class="row">
+      <h3>Masked</h3>
+      <pre id="masked"></pre>
+    </div>
+    <div class="row">
+      <h3>Restored</h3>
+      <pre id="restored"></pre>
+    </div>
+    <script type="module">
+      import * as aifw from './vendor/aifw-js/aifw-js.js';
+      const statusEl = document.getElementById('status');
+      const textEl = document.getElementById('text');
+      const maskedEl = document.getElementById('masked');
+      const restoredEl = document.getElementById('restored');
+      const runBtn = document.getElementById('run');
+
+      async function main() {
+        statusEl.textContent = 'Initializing AIFW...';
+        await aifw.init({ wasmBase: './vendor/aifw-js/wasm/', modelsBase: './vendor/aifw-js/models/' });
+        statusEl.textContent = 'AIFW initialized.';
+
+        let shutdownCalled = false;
+        function shutdownOnce() {
+          if (shutdownCalled) return;
+          shutdownCalled = true;
+          aifw.deinit();
+        }
+        window.addEventListener('pagehide', shutdownOnce, { once: true });
+        window.addEventListener('beforeunload', shutdownOnce, { once: true });
+
+        runBtn.addEventListener('click', async () => {
+          let sess = null;
+          try {
+            statusEl.textContent = 'Running...';
+            maskedEl.textContent = '';
+            restoredEl.textContent = '';
+
+            sess = await aifw.createSession();
+
+            const textStr = textEl.value || '';
+            const maskedStr = await aifw.maskText(sess, textStr);
+            maskedEl.textContent = maskedStr;
+
+            const restoredStr = await aifw.restoreText(sess, maskedStr);
+            restoredEl.textContent = restoredStr;
+
+            statusEl.textContent = 'Done';
+          } catch (e) {
+            statusEl.textContent = `Error: ${e.message || e}`;
+          } finally {
+            if (sess) await aifw.destroySession(sess);
+          }
+        });
+      }
+
+      main().catch((e) => statusEl.textContent = `Error: ${e.message || e}`);
+    </script>
+  </body>
+</html>

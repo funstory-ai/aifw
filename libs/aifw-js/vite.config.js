@@ -13,7 +13,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {
-      external: ['@xenova/transformers'],
+      // Bundle all deps for static usage (no externals)
     },
   },
 })

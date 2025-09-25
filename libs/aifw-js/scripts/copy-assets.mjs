@@ -31,26 +31,37 @@ function copyDir(src, dest) {
   }
 }
 
-function resolveTransformersOrtWasm() {
+function resolveTransformersDist() {
   let pkgPath
   try {
     pkgPath = path.dirname(require.resolve('@xenova/transformers/package.json'))
   } catch (e) {
     return null
   }
-  const ortWasmFilePath = path.join(pkgPath, 'dist/ort-wasm-simd-threaded.wasm')
-  if (!fs.existsSync(ortWasmFilePath)) return null
-  return ortWasmFilePath
+  const dist = path.join(pkgPath, 'dist')
+  if (!fs.existsSync(dist)) return null
+  return dist
 }
 
 function copyTransformersWasm(outRoot) {
-  const ortWasmFilePath = resolveTransformersOrtWasm()
-  if (ortWasmFilePath) {
-    copyFile(ortWasmFilePath, path.join(outRoot, 'wasm'))
-    return true
+  const dist = resolveTransformersDist()
+  if (!dist) {
+    console.warn('[warn] @xenova/transformers dist not found, skipping ORT wasm copy')
+    return false
   }
-  console.error('[error] @xenova/transformers/ort-wasm-simd-threaded.wasm not found, aborting')
-  return false
+  const out = path.join(outRoot, 'wasm')
+  const files = ['ort-wasm-simd-threaded.wasm', 'ort-wasm-simd.wasm']
+  let copied = false
+  for (const f of files) {
+    const p = path.join(dist, f)
+    if (fs.existsSync(p)) {
+      copyFile(p, out)
+      copied = true
+    } else {
+      console.warn('[warn] missing ORT wasm in transformers dist:', p)
+    }
+  }
+  return copied
 }
 
 function copyCoreWasm(outRoot) {

@@ -1,9 +1,16 @@
 import { env, AutoTokenizer, AutoModelForTokenClassification } from '@xenova/transformers';
 
-export function initEnv({ wasmBase = '/wasm/', threads, simd } = {}) {
+let MODELS_BASE = '';
+
+export function initEnv({ wasmBase = '/wasm/', modelsBase = '', threads, simd } = {}) {
   env.allowLocalModels = true;
   env.useBrowserCache = true;
   env.backends.onnx.wasm.wasmPaths = wasmBase;
+  MODELS_BASE = modelsBase || '';
+  if (MODELS_BASE) {
+    const m = MODELS_BASE.endsWith('/') ? MODELS_BASE.slice(0, -1) : MODELS_BASE;
+    env.localModelPath = m; // transformers will fetch from `${env.localModelPath}/${modelId}/...`
+  }
   if (typeof threads === 'number' && threads > 0) env.backends.onnx.wasm.numThreads = threads;
   if (typeof simd === 'boolean') env.backends.onnx.wasm.simd = simd;
 }
@@ -20,6 +27,7 @@ export const SUPPORTED = new Set([
 ]);
 
 function localDirFor(modelId) {
+  // Rely on env.localModelPath as base; return only the model id
   return `${modelId}`;
 }
 

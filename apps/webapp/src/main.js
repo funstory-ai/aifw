@@ -8,8 +8,8 @@ let aifw; // wrapper lib
 
 async function main() {
   statusEl.textContent = 'Initializing AIFW...';
-  aifw = await import('/@fs/Users/liuchangsheng/Work/funstory-ai/OneAIFW/libs/aifw-js/libaifw.js');
-  await aifw.init({ wasmBase: '/wasm/' });
+  aifw = await import('@oneaifw/aifw-js');
+  await aifw.init({ wasmBase: './wasm/' });
   statusEl.textContent = 'AIFW initialized.';
 
   // graceful shutdown on page exit (bfcache + unload)
