@@ -77,7 +77,7 @@ function copyModels(outRoot) {
   const modelsDir = process.env.AIFW_MODELS_DIR
     ? path.resolve(process.env.AIFW_MODELS_DIR)
     : path.resolve(__dirname, '../../..', 'ner-models')
-  const modelIds = (process.env.AIFW_MODEL_IDS || 'Xenova/distilbert-base-cased-finetuned-conll03-english')
+  const modelIds = (process.env.AIFW_MODEL_IDS || 'funstory-ai/neurobert-mini')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
