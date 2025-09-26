@@ -369,7 +369,9 @@ pub const Session = struct {
             list.deinit(allocator);
         }
         for (types) |t| {
-            const r = try RegexRecognizer.buildRecognizerFor(allocator, t, null);
+            const empty_specs = &[_]RegexRecognizer.PatternSpec{};
+            // empty specs means use default static compiled regexs in RegexRecognizer.
+            const r = try RegexRecognizer.init(allocator, empty_specs, t, null);
             list.appendAssumeCapacity(r);
         }
         const regex_list = try list.toOwnedSlice(allocator);
@@ -494,6 +496,7 @@ pub export fn getErrorString(err_no: u16) [*:0]const u8 {
 /// ----- C wrapper for Session -----
 /// Call this function before the program exits, and call this function only once.
 pub export fn aifw_shutdown() void {
+    RegexRecognizer.shutdownCache();
     globalAllocatorDeinit();
 }
 

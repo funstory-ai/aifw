@@ -1,5 +1,7 @@
 const std = @import("std");
 const entity = @import("recog_entity.zig");
+const StringHashMap = std.StringHashMap(*anyopaque);
+const StaticStringMap = std.StaticStringMap(usize);
 extern fn aifw_regex_compile(pattern: [*:0]const u8) ?*anyopaque;
 extern fn aifw_regex_free(re: *anyopaque) void;
 extern fn aifw_regex_find(
@@ -17,6 +19,7 @@ compiled_regexs: []CompiledRegex,
 supported_entity_type: EntityType,
 // The function to validate result of mached text
 validate_result_fn: ?ValidateResultFn,
+// Compiled regex lifetime is global; recognizer only holds references
 
 /// Sometimes, regular expression matching is just a preliminary screening. After
 /// a successful regular expression match, you need to call the validate_result_fn
@@ -42,24 +45,27 @@ const CompiledRegex = struct {
     score: f32,
 };
 
+/// The specs maybe empty, if the specs is empty, the list of compiled regexs of
+/// this recognizer is default static compiled regexs initialized by buildStaticOnce.
 pub fn init(
     allocator: std.mem.Allocator,
     specs: []const PatternSpec,
     entity_type: EntityType,
     validate_fn: ?ValidateResultFn,
 ) !RegexRecognizer {
-    var list = try std.ArrayList(CompiledRegex).initCapacity(allocator, specs.len);
-    errdefer {
-        for (list.items) |c| {
-            aifw_regex_free(c.re);
+    try buildStaticOnce(allocator);
+    var list = try std.ArrayList(CompiledRegex).initCapacity(allocator, 2);
+    errdefer list.deinit(allocator);
+    // Always include static compiled regexes for this entity type
+    const static_regexs = getStaticCompiledRegexsByEntityType(entity_type);
+    try list.appendSlice(allocator, static_regexs);
+    if (specs.len > 0) {
+        for (specs) |s| {
+            // Skip if this dynamic pattern is already included by the static set for this entity
+            const is_exist, const re_ptr = try getCompiledForPattern(allocator, s.pattern);
+            if (is_exist) continue;
+            try list.append(allocator, .{ .name = s.name, .re = re_ptr, .score = s.score });
         }
-        list.deinit(allocator);
-    }
-    for (specs) |s| {
-        const patz = try std.fmt.allocPrintSentinel(allocator, "{s}", .{s.pattern}, 0);
-        defer allocator.free(patz);
-        const re_ptr = aifw_regex_compile(patz) orelse return error.RegexCompileFailed;
-        list.appendAssumeCapacity(.{ .name = s.name, .re = re_ptr, .score = s.score });
     }
     return RegexRecognizer{
         .allocator = allocator,
@@ -70,7 +76,7 @@ pub fn init(
 }
 
 pub fn deinit(self: *const RegexRecognizer) void {
-    for (self.compiled_regexs) |c| aifw_regex_free(c.re);
+    // Only free the slice; compiled regex objects are managed globally
     self.allocator.free(self.compiled_regexs);
 }
 
@@ -158,15 +164,117 @@ const SEED_SPECS = [_]PatternSpec{
     .{ .name = "SEED_PHRASE", .pattern = "(?i)(seed|mnemonic)\\s*[:=]?\\s*([a-z]+\\s+){11,23}[a-z]+", .score = 0.70 },
 };
 
-/// Helper to build recognizer for a given entity type.
-pub fn buildRecognizerFor(
-    allocator: std.mem.Allocator,
-    entity_type: EntityType,
-    validate_fn: ?ValidateResultFn,
-) !RegexRecognizer {
-    const specs = presetSpecsFor(entity_type);
-    if (specs.len == 0) return error.NoSpecs;
-    return RegexRecognizer.init(allocator, specs, entity_type, validate_fn);
+// --- Global caches: static presets (StaticStringMap -> index -> slot) and dynamic patterns ---
+var g_cache_inited: bool = false;
+var g_cache_alloc: ?std.mem.Allocator = null;
+
+// Static mapping of pattern -> index (comptime)
+const KV_PATTERN_SLOT = struct { []const u8, usize };
+
+const KVS_PATTERN_SLOT = [_]KV_PATTERN_SLOT{
+    .{ EMAIL_SPECS[0].pattern, 0 },
+    .{ URL_SPECS[0].pattern, 1 },
+    .{ PHONE_SPECS[0].pattern, 2 },
+    .{ BANK_SPECS[0].pattern, 3 },
+    .{ PRIVKEY_SPECS[0].pattern, 4 },
+    .{ PRIVKEY_SPECS[1].pattern, 5 },
+    .{ VCODE_SPECS[0].pattern, 6 },
+    .{ PASSWORD_SPECS[0].pattern, 7 },
+    .{ SEED_SPECS[0].pattern, 8 },
+};
+const STATIC_MAP = StaticStringMap.initComptime(&KVS_PATTERN_SLOT);
+
+var g_static_slots: [KVS_PATTERN_SLOT.len]?*anyopaque = undefined;
+
+fn getStaticCompiledRegexsByEntityType(entity_type: EntityType) []const CompiledRegex {
+    return switch (entity_type) {
+        .EMAIL_ADDRESS => &[_]CompiledRegex{.{ .name = EMAIL_SPECS[0].name, .re = g_static_slots[0].?, .score = EMAIL_SPECS[0].score }},
+        .URL_ADDRESS => &[_]CompiledRegex{.{ .name = URL_SPECS[0].name, .re = g_static_slots[1].?, .score = URL_SPECS[0].score }},
+        .PHONE_NUMBER => &[_]CompiledRegex{.{ .name = PHONE_SPECS[0].name, .re = g_static_slots[2].?, .score = PHONE_SPECS[0].score }},
+        .BANK_NUMBER => &[_]CompiledRegex{.{ .name = BANK_SPECS[0].name, .re = g_static_slots[3].?, .score = BANK_SPECS[0].score }},
+        .PRIVATE_KEY => &[_]CompiledRegex{
+            .{ .name = PRIVKEY_SPECS[0].name, .re = g_static_slots[4].?, .score = PRIVKEY_SPECS[0].score },
+            .{ .name = PRIVKEY_SPECS[1].name, .re = g_static_slots[5].?, .score = PRIVKEY_SPECS[1].score },
+        },
+        .VERIFICATION_CODE => &[_]CompiledRegex{.{ .name = VCODE_SPECS[0].name, .re = g_static_slots[6].?, .score = VCODE_SPECS[0].score }},
+        .PASSWORD => &[_]CompiledRegex{.{ .name = PASSWORD_SPECS[0].name, .re = g_static_slots[7].?, .score = PASSWORD_SPECS[0].score }},
+        .RANDOM_SEED => &[_]CompiledRegex{.{ .name = SEED_SPECS[0].name, .re = g_static_slots[8].?, .score = SEED_SPECS[0].score }},
+        else => &[_]CompiledRegex{},
+    };
+}
+
+// Dynamic map for runtime-added patterns
+var g_dynamic_map: StringHashMap = undefined;
+var g_dynamic_keys: std.ArrayListUnmanaged([]u8) = .{}; // own copies of dynamic pattern strings
+
+fn ensureMapsInit(allocator: std.mem.Allocator) void {
+    if (g_cache_inited) return;
+    g_dynamic_map = StringHashMap.init(allocator);
+    g_dynamic_keys = .{};
+    // init static slots
+    for (&g_static_slots) |*slot| slot.* = null;
+    g_cache_alloc = allocator;
+    g_cache_inited = true;
+}
+
+fn compileRegex(allocator: std.mem.Allocator, pattern: []const u8) !*anyopaque {
+    const patz = try std.fmt.allocPrintSentinel(allocator, "{s}", .{pattern}, 0);
+    defer allocator.free(patz);
+    const re_ptr = aifw_regex_compile(patz) orelse return error.RegexCompileFailed;
+    return re_ptr;
+}
+
+fn buildStaticOnce(allocator: std.mem.Allocator) !void {
+    ensureMapsInit(allocator);
+    // If already compiled, skip
+    if (g_static_slots[0] != null) return;
+    var i: usize = 0;
+    while (i < KVS_PATTERN_SLOT.len) : (i += 1) {
+        const re = try compileRegex(allocator, KVS_PATTERN_SLOT[i].@"0");
+        g_static_slots[i] = re;
+    }
+}
+
+fn getCompiledForPattern(allocator: std.mem.Allocator, pattern: []const u8) !struct { bool, *anyopaque } {
+    ensureMapsInit(allocator);
+    if (STATIC_MAP.get(pattern)) |idx| {
+        if (g_static_slots[idx]) |p| return .{ true, p };
+        const re2 = try compileRegex(allocator, pattern);
+        g_static_slots[idx] = re2;
+        return .{ false, re2 };
+    }
+    if (g_dynamic_map.get(pattern)) |re| return .{ true, re };
+    // compile dynamically and insert into dynamic map; own the key copy
+    const key_copy = try allocator.dupe(u8, pattern);
+    errdefer allocator.free(key_copy);
+    const re = try compileRegex(allocator, pattern);
+    try g_dynamic_map.put(key_copy, re);
+    try g_dynamic_keys.append(allocator, key_copy);
+    return .{ false, re };
+}
+
+pub fn shutdownCache() void {
+    if (!g_cache_inited) return;
+    // Free all regex pointers from both caches
+    for (&g_static_slots) |*slot|
+        if (slot.*) |regex| {
+            aifw_regex_free(regex);
+            slot.* = null;
+        };
+
+    {
+        var it2 = g_dynamic_map.iterator();
+        while (it2.next()) |e| {
+            aifw_regex_free(e.value_ptr.*);
+        }
+    }
+    // Free dynamic keys we allocated
+    if (g_cache_alloc) |alloc| {
+        for (g_dynamic_keys.items) |k| alloc.free(k);
+        g_dynamic_keys.deinit(alloc);
+    }
+    g_dynamic_map.deinit();
+    g_cache_inited = false;
 }
 
 test "regex recognizer finds simple email" {
