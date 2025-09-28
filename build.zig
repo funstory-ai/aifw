@@ -34,7 +34,7 @@ pub fn build(b: *std.Build) void {
     const aifw_core_wasm_mod = b.createModule(.{
         .root_source_file = b.path("core/aifw_core.zig"),
         .target = wasm_target,
-        .optimize = optimize,
+        .optimize = std.builtin.OptimizeMode.ReleaseSmall,
     });
 
     const wasm_exe = b.addExecutable(.{

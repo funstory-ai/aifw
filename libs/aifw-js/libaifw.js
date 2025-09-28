@@ -69,7 +69,7 @@ export async function init({ wasmBase = '/wasm/', modelsBase = '/models/' }) {
   const threads = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) ? Math.max(1, navigator.hardwareConcurrency) : 1;
   nerLib.initEnv({ wasmBase, modelsBase, threads, simd: true });
 
-  const modelId = 'Xenova/distilbert-base-cased-finetuned-conll03-english';
+  const modelId = 'funstory-ai/neurobert-mini';
   ner = await nerLib.buildNerPipeline(modelId, { quantized: true });
 }
 
