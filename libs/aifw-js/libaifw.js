@@ -66,7 +66,7 @@ export async function init({ wasmBase = '/wasm/', modelsBase = '/models/' }) {
   nerLib = await import('./libner.js');
 
   // Force SIMD on, and set threads from hardwareConcurrency (>=1)
-  const threads = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) ? Math.max(1, navigator.hardwareConcurrency) : 1;
+  const threads = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) ? Math.max(2, navigator.hardwareConcurrency) : 1;
   nerLib.initEnv({ wasmBase, modelsBase, threads, simd: true });
 
   const modelId = 'funstory-ai/neurobert-mini';

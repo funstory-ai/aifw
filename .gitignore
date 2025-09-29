@@ -18,4 +18,5 @@ node_modules
 dist
 tests/transformer-js/public
 apps/webapp/public
+browser_extension/vendor
 
