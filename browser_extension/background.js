@@ -45,7 +45,6 @@ chrome.runtime.onInstalled.addListener(async () => {
   try {
     await ensureOffscreen()
     chrome.contextMenus.create({ id: 'aifw-mask', title: 'Anonymize with OneAIFW', contexts: ['selection'] })
-    chrome.contextMenus.create({ id: 'aifw-restore', title: 'Restore with OneAIFW', contexts: ['selection'] })
   } catch (e) {
     console.error('[aifw-ext] init failed', e)
   }
@@ -53,7 +52,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const type = info.menuItemId
-  if (type !== 'aifw-mask' && type !== 'aifw-restore') return
+  if (type !== 'aifw-mask') return
   if (!tab?.id) return
   try {
     const [{ result: sel }] = await chrome.scripting.executeScript({
@@ -61,7 +60,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       func: () => window.getSelection()?.toString() || ''
     })
     if (!sel) return
-    const resp = await offscreenCall(type === 'aifw-mask' ? 'mask' : 'restore', sel)
+    const resp = await offscreenCall('mask', sel)
     if (resp?.ok) {
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: (t) => navigator.clipboard.writeText(t), args: [resp.text] })
     } else {

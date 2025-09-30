@@ -8,21 +8,26 @@ import { getFromCache, putToCache } from './indexeddb-models.js'
 export const modelsBase = 'https://aifw-js.local/models/'
 
 // Example remote base hosting the model assets (downloaded once, then cached)
-export const remoteBase = 'https://s.immersivetranslate.com/assets/OneAIFW/Models/20250926/'
+export const remoteModelsBase = 'https://s.immersivetranslate.com/assets/OneAIFW/Models/20250926/'
 
 export const defaultModelId = 'funstory-ai/neurobert-mini'
 
+// Set ORT global config before init
+const wasmBase = chrome.runtime.getURL('vendor/aifw-js/wasm/');
+
+// If offscreen.html is already COOP/COEP (crossOriginIsolated=true), we can use multi-thread;
+// otherwise, automatically downgrade
+// const threads = (globalThis.crossOriginIsolated && navigator.hardwareConcurrency) ? Math.min(Math.max(2, navigator.hardwareConcurrency), 8) : 1;
+
 try {
   console.log('crossOriginIsolated=', globalThis.crossOriginIsolated);
-  if (!globalThis.crossOriginIsolated &&
-      navigator.hardwareConcurrency &&
-      navigator.hardwareConcurrency > 1) {
+  if (navigator.hardwareConcurrency && navigator.hardwareConcurrency > 1) {
     // Force setting navigator.hardwareConcurrency to 1 for avoid importScript errors
     Object.defineProperty(navigator, 'hardwareConcurrency', { value: 1, configurable: true });
   }
 } catch {}
 
-export async function ensureModelCached(modelId = defaultModelId, base = remoteBase) {
+export async function ensureModelCached(modelId = defaultModelId, base = remoteModelsBase) {
   const files = [
     'tokenizer.json',
     'tokenizer_config.json',
@@ -66,10 +71,10 @@ function installModelsFetchShim() {
   }
 }
 
-export async function initAifwWithCache({ wasmBase } = {}) {
+export async function initAifwWithCache() {
   installModelsFetchShim()
   await aifw.init({
-    wasmBase: wasmBase || chrome.runtime.getURL('vendor/aifw-js/wasm/'),
+    wasmBase: wasmBase,
     modelsBase
   })
   return aifw

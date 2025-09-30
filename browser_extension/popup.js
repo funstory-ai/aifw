@@ -17,7 +17,6 @@ async function callBg(type, text) {
 btnMask.addEventListener('click', async () => {
   setStatus('Masking...')
   maskedEl.textContent = ''
-  restoredEl.textContent = ''
   const resp = await callBg('ANON', input.value || '')
   if (resp?.ok) {
     maskedEl.textContent = resp.data.text
@@ -30,7 +29,7 @@ btnMask.addEventListener('click', async () => {
 btnRestore.addEventListener('click', async () => {
   setStatus('Restoring...')
   restoredEl.textContent = ''
-  const resp = await callBg('RESTORE', input.value || '')
+  const resp = await callBg('RESTORE', maskedEl.textContent || '')
   if (resp?.ok) {
     restoredEl.textContent = resp.data.text
     setStatus('Done')
