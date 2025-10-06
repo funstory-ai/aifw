@@ -214,8 +214,16 @@ function findStrippedIndexAtOrAfter(map, origIndex) {
   return lo;
 }
 
-// Build a WASM buffer of NerRecogEntity (wasm32 layout):
-// struct { char* entity; float score; uint32 index; uint32 start; uint32 end; }
+// Build a WASM buffer of NerRecogEntity (wasm32 C layout):
+// struct {
+//   uint8 entity_type;    // recog_entity.zig::EntityType
+//   uint8 entity_tag;     // recog_entity.zig::EntityBioTag
+//   uint16 _pad;          // padding to align to 4 bytes
+//   float score;
+//   uint32 index;
+//   uint32 start;
+//   uint32 end;
+// } // total 20 bytes
 export function buildNerEntitiesBuffer(wasm, items, textLen) {
   if (!items?.length) return { ptr: 0, count: 0, owned: [], byteSize: 0 };
   const structSize = 20;
@@ -224,26 +232,53 @@ export function buildNerEntitiesBuffer(wasm, items, textLen) {
   const arrPtr = wasm.aifw_malloc(total);
   if (!arrPtr) throw new Error('aifw_malloc ner entities failed');
   const dv = new DataView(wasm.memory.buffer);
-  const owned = [];
-  const getPtrFor = (s) => {
-    const bytes = new TextEncoder().encode(String(s));
-    const buf = new Uint8Array(bytes.length + 1);
-    buf.set(bytes); buf[bytes.length] = 0;
-    const p = wasm.aifw_malloc(buf.length);
-    new Uint8Array(wasm.memory.buffer, p, buf.length).set(buf);
-    owned.push({ ptr: p, size: buf.length });
-    return p;
+
+  // Keep in sync with core/recog_entity.zig
+  const EntityType = {
+    None: 0,
+    PHYSICAL_ADDRESS: 1,
+    EMAIL_ADDRESS: 2,
+    ORGANIZATION: 3,
+    USER_MAME: 4,
+    PHONE_NUMBER: 5,
+    BANK_NUMBER: 6,
+    PAYMENT: 7,
+    VERIFICATION_CODE: 8,
+    PASSWORD: 9,
+    RANDOM_SEED: 10,
+    PRIVATE_KEY: 11,
+    URL_ADDRESS: 12,
   };
+  const BioTag = { None: 0, Begin: 1, Inside: 2 };
+
+  const toCore = (e) => (typeof e === 'string' && (e.startsWith('B-') || e.startsWith('I-'))) ? e.slice(2) : String(e || 'MISC');
+  const toTag = (e) => (typeof e === 'string' && e.startsWith('B-')) ? BioTag.Begin : BioTag.Inside;
+  const toEntityType = (core) => {
+    switch (core) {
+      case 'PER': return EntityType.USER_MAME;
+      case 'ORG': return EntityType.ORGANIZATION;
+      case 'LOC': return EntityType.PHYSICAL_ADDRESS;
+      case 'MISC': return EntityType.None;
+      default: return EntityType.None;
+    }
+  };
+
   for (let i = 0; i < count; i++) {
     const it = items[i];
     let s = Math.max(0, Math.min(textLen, Number(it.start || 0)));
     let e = Math.max(s, Math.min(textLen, Number(it.end || 0)));
     const base = arrPtr + i * structSize;
-    dv.setUint32(base + 0, getPtrFor(String(it.entity || 'B-MISC')), true);
+    const entityCore = toCore(it.entity);
+    const entityTypeVal = toEntityType(entityCore);
+    const tagVal = toTag(it.entity);
+
+    dv.setUint8(base + 0, entityTypeVal);
+    dv.setUint8(base + 1, tagVal);
+    // base+2..+3 padding (leave as 0)
     dv.setFloat32(base + 4, Number(it.score || 0), true);
     dv.setUint32(base + 8, Number(it.index || 0) >>> 0, true);
     dv.setUint32(base + 12, s >>> 0, true);
     dv.setUint32(base + 16, e >>> 0, true);
   }
-  return { ptr: arrPtr, count, owned, byteSize: total };
+  return { ptr: arrPtr, count, owned: [], byteSize: total };
 }

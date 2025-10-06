@@ -7,6 +7,7 @@ ner_recog_type: NerRecogType,
 
 pub const RecogEntity = entity.RecogEntity;
 pub const EntityType = entity.EntityType;
+pub const EntityBioTag = entity.EntityBioTag;
 
 pub const NerRecogType = enum(u8) { token_classification, sequence_classification };
 
@@ -29,8 +30,10 @@ pub const NerRecogData = extern struct {
 // };
 
 pub const NerRecogEntity = extern struct {
-    /// The identifier string of the entity, for example, "B-PER", "I-PER", "B-ORG", "I-ORG", etc.
-    entity: [*:0]const u8,
+    /// The type of the entity, for example, .USER_MAME, .ORGANIZATION, .PHYSICAL_ADDRESS, etc.
+    entity_type: EntityType,
+    entity_tag: EntityBioTag,
+
     /// The score of the entity
     score: f32,
     /// The index of the token in tokenized tokens from text
@@ -116,19 +119,16 @@ fn aggregateNerRecogEntityToRecogEntity(
     std.log.debug("aggregateNerRecogEntityToRecogEntity: entities_count={d}, idx={d}, pos={d}", .{ entities_count, i, pos.* });
     while (i < entities_count) : (i += 1) {
         const tok = entities[i];
-        const entity_str = std.mem.span(tok.entity);
-        std.log.debug("aggregateNerRecogEntityToRecogEntity: i={d}, entity_str={s}, start={d}, end={d}, word={s}", .{ i, entity_str, tok.start, tok.end, text[tok.start..tok.end] });
-        const is_begin, const ner_type_str = extractEntityString(entity_str) orelse {
-            if (have_entity) break else continue;
-        };
-        const t = mapNerTypeStrToEntityType(ner_type_str);
+        std.log.debug("aggregateNerRecogEntityToRecogEntity: i={d}, type={any}, tag={any}, start={d}, end={d}, word={s}", .{ i, tok.entity_type, tok.entity_tag, tok.start, tok.end, text[tok.start..tok.end] });
+        const t = tok.entity_type;
+        const is_begin = tok.entity_tag == .Begin;
         if (t == .None) {
             if (have_entity) break else continue;
         }
 
         if (!have_entity) {
             if (!is_begin) continue;
-            std.log.debug("aggregateNerRecogEntityToRecogEntity: is_begin=true, t={s}", .{ner_type_str});
+            std.log.debug("aggregateNerRecogEntityToRecogEntity: is_begin=true, type={any}", .{t});
             have_entity = true;
             recog_entity.entity_type = t;
             recog_entity.start = tok.start;
@@ -169,20 +169,6 @@ fn aggregateNerRecogEntityToRecogEntity(
     }
     std.log.debug("aggregateNerRecogEntityToRecogEntity: return recog_entity, pos={d}", .{pos.*});
     return recog_entity;
-}
-
-fn extractEntityString(entity_str: []const u8) ?struct { bool, []const u8 } {
-    if (std.mem.startsWith(u8, entity_str, "B-")) return .{ true, entity_str[2..] };
-    if (std.mem.startsWith(u8, entity_str, "I-")) return .{ false, entity_str[2..] };
-    return null;
-}
-
-fn mapNerTypeStrToEntityType(ner_type_str: []const u8) EntityType {
-    if (std.mem.eql(u8, ner_type_str, "PER")) return .USER_MAME;
-    if (std.mem.eql(u8, ner_type_str, "ORG")) return .ORGANIZATION;
-    if (std.mem.eql(u8, ner_type_str, "LOC")) return .PHYSICAL_ADDRESS;
-    if (std.mem.eql(u8, ner_type_str, "MISC")) return .None;
-    return .None;
 }
 
 fn hasSubwordPrefix(word: []const u8) bool {

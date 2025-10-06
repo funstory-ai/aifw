@@ -13,8 +13,8 @@ pub fn main() !void {
 
     const input = "Hi, my email is example.test@funstory.com, my phone number is 13800138027, my name is John Doe";
     const ner_entities = [_]core.NerRecognizer.NerRecogEntity{
-        .{ .entity = "B-PER", .score = 0.98, .index = 14, .start = 86, .end = 90 },
-        .{ .entity = "I-PER", .score = 0.98, .index = 15, .start = 91, .end = 94 },
+        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 14, .start = 86, .end = 90 },
+        .{ .entity_type = .USER_MAME, .entity_tag = .Inside, .score = 0.98, .index = 15, .start = 91, .end = 94 },
     };
     var masked_text: [*:0]u8 = undefined;
     var err_no = core.aifw_session_mask(

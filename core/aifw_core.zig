@@ -449,7 +449,7 @@ test "session mask/restore" {
 
     const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
     const ner_entities = [_]NerRecogEntity{
-        .{ .entity = "B-PER", .score = 0.98, .index = 10, .start = 68, .end = 77 },
+        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
     };
     const masked_text = try session.mask(input, &ner_entities);
     std.debug.print("masked={s}\n", .{masked_text});

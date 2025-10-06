@@ -19,6 +19,14 @@ pub const EntityType = enum(u8) {
     URL_ADDRESS,
 };
 
+/// The kind of the entity, for example, .Begin, .Inside, etc.
+/// Response the string "B-", "I-", etc. in the external NER output.
+pub const EntityBioTag = enum(u8) {
+    None, // Outside of the entity
+    Begin, // Begin of the entity
+    Inside, // Inside of the entity
+};
+
 pub const RecogEntity = struct {
     entity_type: EntityType = .None,
     start: usize,
