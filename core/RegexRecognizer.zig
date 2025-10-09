@@ -41,6 +41,7 @@ pub const PatternSpec = struct {
 
 const CompiledRegex = struct {
     name: []const u8,
+    pattern_text: []const u8,
     re: *anyopaque,
     score: f32,
 };
@@ -56,15 +57,14 @@ pub fn init(
     try buildStaticOnce(allocator);
     var list = try std.ArrayList(CompiledRegex).initCapacity(allocator, 2);
     errdefer list.deinit(allocator);
-    // Always include static compiled regexes for this entity type
-    const static_regexs = getStaticCompiledRegexsByEntityType(entity_type);
-    try list.appendSlice(allocator, static_regexs);
+    // Always include static compiled regexes for this entity type (copy into owned storage)
+    try appendStaticCompiledForEntity(allocator, entity_type, &list);
     if (specs.len > 0) {
         for (specs) |s| {
             // Skip if this dynamic pattern is already included by the static set for this entity
             const is_exist, const re_ptr = try getCompiledForPattern(allocator, s.pattern);
             if (is_exist) continue;
-            try list.append(allocator, .{ .name = s.name, .re = re_ptr, .score = s.score });
+            try list.append(allocator, .{ .name = s.name, .pattern_text = s.pattern, .re = re_ptr, .score = s.score });
         }
     }
     return RegexRecognizer{
@@ -84,7 +84,9 @@ pub fn run(self: *const RegexRecognizer, input: []const u8) ![]RecogEntity {
     var out = try std.ArrayList(RecogEntity).initCapacity(self.allocator, 2);
     errdefer out.deinit(self.allocator);
 
+    std.log.debug("[regex] run type={s} compiled={d}", .{ @tagName(self.supported_entity_type), self.compiled_regexs.len });
     for (self.compiled_regexs) |c| {
+        std.log.debug("[regex] try pattern: {s} / {s}", .{ c.name, c.pattern_text });
         var pos: usize = 0;
         while (pos <= input.len) {
             var s: usize = 0;
@@ -106,6 +108,7 @@ pub fn run(self: *const RegexRecognizer, input: []const u8) ![]RecogEntity {
             pos = if (e > pos) e else pos + 1;
         }
     }
+    std.log.debug("[regex] primary matches: {d}", .{out.items.len});
     return try out.toOwnedSlice(self.allocator);
 }
 
@@ -186,23 +189,6 @@ const STATIC_MAP = StaticStringMap.initComptime(&KVS_PATTERN_SLOT);
 
 var g_static_slots: [KVS_PATTERN_SLOT.len]?*anyopaque = undefined;
 
-fn getStaticCompiledRegexsByEntityType(entity_type: EntityType) []const CompiledRegex {
-    return switch (entity_type) {
-        .EMAIL_ADDRESS => &[_]CompiledRegex{.{ .name = EMAIL_SPECS[0].name, .re = g_static_slots[0].?, .score = EMAIL_SPECS[0].score }},
-        .URL_ADDRESS => &[_]CompiledRegex{.{ .name = URL_SPECS[0].name, .re = g_static_slots[1].?, .score = URL_SPECS[0].score }},
-        .PHONE_NUMBER => &[_]CompiledRegex{.{ .name = PHONE_SPECS[0].name, .re = g_static_slots[2].?, .score = PHONE_SPECS[0].score }},
-        .BANK_NUMBER => &[_]CompiledRegex{.{ .name = BANK_SPECS[0].name, .re = g_static_slots[3].?, .score = BANK_SPECS[0].score }},
-        .PRIVATE_KEY => &[_]CompiledRegex{
-            .{ .name = PRIVKEY_SPECS[0].name, .re = g_static_slots[4].?, .score = PRIVKEY_SPECS[0].score },
-            .{ .name = PRIVKEY_SPECS[1].name, .re = g_static_slots[5].?, .score = PRIVKEY_SPECS[1].score },
-        },
-        .VERIFICATION_CODE => &[_]CompiledRegex{.{ .name = VCODE_SPECS[0].name, .re = g_static_slots[6].?, .score = VCODE_SPECS[0].score }},
-        .PASSWORD => &[_]CompiledRegex{.{ .name = PASSWORD_SPECS[0].name, .re = g_static_slots[7].?, .score = PASSWORD_SPECS[0].score }},
-        .RANDOM_SEED => &[_]CompiledRegex{.{ .name = SEED_SPECS[0].name, .re = g_static_slots[8].?, .score = SEED_SPECS[0].score }},
-        else => &[_]CompiledRegex{},
-    };
-}
-
 // Dynamic map for runtime-added patterns
 var g_dynamic_map: StringHashMap = undefined;
 var g_dynamic_keys: std.ArrayListUnmanaged([]u8) = .{}; // own copies of dynamic pattern strings
@@ -232,6 +218,72 @@ fn buildStaticOnce(allocator: std.mem.Allocator) !void {
     while (i < KVS_PATTERN_SLOT.len) : (i += 1) {
         const re = try compileRegex(allocator, KVS_PATTERN_SLOT[i].@"0");
         g_static_slots[i] = re;
+    }
+}
+
+fn appendStaticCompiledForEntity(
+    allocator: std.mem.Allocator,
+    entity_type: EntityType,
+    list: *std.ArrayList(CompiledRegex),
+) !void {
+    switch (entity_type) {
+        .EMAIL_ADDRESS => try list.append(allocator, .{
+            .name = EMAIL_SPECS[0].name,
+            .pattern_text = EMAIL_SPECS[0].pattern,
+            .re = g_static_slots[0].?,
+            .score = EMAIL_SPECS[0].score,
+        }),
+        .URL_ADDRESS => try list.append(allocator, .{
+            .name = URL_SPECS[0].name,
+            .pattern_text = URL_SPECS[0].pattern,
+            .re = g_static_slots[1].?,
+            .score = URL_SPECS[0].score,
+        }),
+        .PHONE_NUMBER => try list.append(allocator, .{
+            .name = PHONE_SPECS[0].name,
+            .pattern_text = PHONE_SPECS[0].pattern,
+            .re = g_static_slots[2].?,
+            .score = PHONE_SPECS[0].score,
+        }),
+        .BANK_NUMBER => try list.append(allocator, .{
+            .name = BANK_SPECS[0].name,
+            .pattern_text = BANK_SPECS[0].pattern,
+            .re = g_static_slots[3].?,
+            .score = BANK_SPECS[0].score,
+        }),
+        .PRIVATE_KEY => {
+            try list.append(allocator, .{
+                .name = PRIVKEY_SPECS[0].name,
+                .pattern_text = PRIVKEY_SPECS[0].pattern,
+                .re = g_static_slots[4].?,
+                .score = PRIVKEY_SPECS[0].score,
+            });
+            try list.append(allocator, .{
+                .name = PRIVKEY_SPECS[1].name,
+                .pattern_text = PRIVKEY_SPECS[1].pattern,
+                .re = g_static_slots[5].?,
+                .score = PRIVKEY_SPECS[1].score,
+            });
+        },
+        .VERIFICATION_CODE => try list.append(allocator, .{
+            .name = VCODE_SPECS[0].name,
+            .pattern_text = VCODE_SPECS[0].pattern,
+            .re = g_static_slots[6].?,
+            .score = VCODE_SPECS[0].score,
+        }),
+        .PASSWORD => try list.append(allocator, .{
+            .name = PASSWORD_SPECS[0].name,
+            .pattern_text = PASSWORD_SPECS[0].pattern,
+            .re = g_static_slots[7].?,
+            .score = PASSWORD_SPECS[0].score,
+        }),
+        .RANDOM_SEED => try list.append(allocator, .{
+            .name = SEED_SPECS[0].name,
+            .pattern_text = SEED_SPECS[0].pattern,
+            .re = g_static_slots[8].?,
+            .score = SEED_SPECS[0].score,
+        }),
+        else => {},
     }
 }
 
