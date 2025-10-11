@@ -52,6 +52,9 @@ pub fn build(b: *std.Build) void {
         "aifw_session_destroy",
         "aifw_session_mask",
         "aifw_session_restore",
+        "aifw_session_mask_and_out_meta",
+        "aifw_session_restore_with_meta",
+        "aifw_session_get_pii_spans",
     };
 
     const cargo_wasm = b.addSystemCommand(&[_][]const u8{ "cargo", "build", "--release", "--target", "wasm32-unknown-unknown" });

@@ -4,6 +4,7 @@ import { ensureModelCached, initAifwWithCache, defaultModelId } from './aifw-ext
 
 let ready = false
 let sess = null
+let lastMetas = null
 
 async function ensureReady() {
   if (ready) return
@@ -20,12 +21,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await ensureReady()
         if (msg.cmd === 'mask') {
           if (!sess) sess = await aifw.createSession()
-          const out = await aifw.maskText(sess, msg.text || '')
-          sendResponse({ ok: true, text: out })
+          const text = msg.text || ''
+          const lines = text.split(/\r?\n/)
+          const masked = []
+          const metas = []
+          for (const line of lines) {
+            const [m, meta] = await aifw.maskText(sess, line)
+            masked.push(m)
+            metas.push(meta)
+          }
+          lastMetas = metas
+          sendResponse({ ok: true, text: masked.join('\n'), meta: metas })
         } else if (msg.cmd === 'restore') {
           if (!sess) { sendResponse({ ok: false, error: 'No active session. Run Mask first.' }); return; }
-          const out = await aifw.restoreText(sess, msg.text || '')
-          sendResponse({ ok: true, text: out })
+          const text = msg.text || ''
+          const metas = Array.isArray(msg.meta) ? msg.meta : (lastMetas || [])
+          const lines = text.split(/\r?\n/)
+          const restored = []
+          for (let i=0;i<lines.length;i++) {
+            const rest = await aifw.restoreText(sess, lines[i], metas[i])
+            restored.push(rest)
+          }
+          lastMetas = null
+          sendResponse({ ok: true, text: restored.join('\n') })
           await aifw.destroySession(sess)
           sess = null
         } else {

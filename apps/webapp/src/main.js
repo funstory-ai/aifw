@@ -32,10 +32,23 @@ async function main() {
       sess = await aifw.createSession();
 
       const textStr = textEl.value || '';
-      const maskedStr = await aifw.maskText(sess, textStr);
+      const lines = textStr.split(/\r?\n/);
+      const maskedLines = [];
+      const metas = [];
+      for (const line of lines) {
+        const [m, meta] = await aifw.maskText(sess, line);
+        maskedLines.push(m);
+        metas.push(meta);
+      }
+      const maskedStr = maskedLines.join('\n');
       maskedEl.textContent = maskedStr;
 
-      const restoredStr = await aifw.restoreText(sess, maskedStr);
+      const restoredLines = [];
+      for (let i = 0; i < maskedLines.length; i++) {
+        const rest = await aifw.restoreText(sess, maskedLines[i], metas[i]);
+        restoredLines.push(rest);
+      }
+      const restoredStr = restoredLines.join('\n');
       restoredEl.textContent = restoredStr;
 
       statusEl.textContent = 'Done';

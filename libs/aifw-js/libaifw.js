@@ -48,7 +48,9 @@ async function loadAifwCore(wasmBase) {
   } else {
     urlStr = new URL(/* @vite-ignore */ './wasm/liboneaifw_core.wasm', import.meta.url).toString();
   }
-  const resp = await fetch(urlStr);
+  // cache-bust to avoid stale core wasm in extension/webapp
+  const bust = (urlStr.includes('?') ? '&' : '?') + 'v=' + Date.now();
+  const resp = await fetch(urlStr + bust, { cache: 'no-store' });
   if (!resp.ok) throw new Error(`fetch core wasm failed: ${resp.status}`);
   const bytes = await resp.arrayBuffer();
   const { instance } = await WebAssembly.instantiate(bytes, imports);
@@ -124,27 +126,31 @@ export async function maskText(sess, inputText) {
   }
   let nerBuf = null;
   let outMaskedPtrPtr = 0;
+  let outMaskMetaPtrPtr = 0;
   try {
     sess.zig_text = allocZstrFromJs(inputText);
     const items = await ner.run(inputText);
     nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText.length);
 
     outMaskedPtrPtr = wasm.aifw_malloc(4);
-    const rcMask = wasm.aifw_session_mask(sess.handle, sess.zig_text.ptr, nerBuf.ptr, nerBuf.count >>> 0, outMaskedPtrPtr);
+    outMaskMetaPtrPtr = wasm.aifw_malloc(4);
+    const rcMask = wasm.aifw_session_mask_and_out_meta(sess.handle, sess.zig_text.ptr, nerBuf.ptr, nerBuf.count >>> 0, outMaskedPtrPtr, outMaskMetaPtrPtr);
     if (rcMask !== 0) throw new Error(`mask failed rc=${rcMask}`);
     const maskedPtr = new DataView(wasm.memory.buffer).getUint32(outMaskedPtrPtr, true);
     const maskedStr = readZstr(maskedPtr);
     // free masked core string after copying out
     wasm.aifw_string_free(maskedPtr);
-    return maskedStr;
+    const maskMetaPtr = new DataView(wasm.memory.buffer).getUint32(outMaskMetaPtrPtr, true);
+    return [maskedStr, maskMetaPtr];
   } finally {
     if (outMaskedPtrPtr) freeBuf(outMaskedPtrPtr, 4);
+    if (outMaskMetaPtrPtr) freeBuf(outMaskMetaPtrPtr, 4);
     if (nerBuf?.ptr) freeBuf(nerBuf.ptr, nerBuf.byteSize);
     if (nerBuf?.owned) for (const s of nerBuf.owned) freeBuf(s.ptr, s.size);
   }
 }
 
-export async function restoreText(sess, maskedText) {
+export async function restoreText(sess, maskedText, maskMetaPtr) {
   if (!wasm || !sess?.handle) throw new Error('invalid session');
 
   let wasmMaskedText = null;
@@ -152,7 +158,7 @@ export async function restoreText(sess, maskedText) {
   try {
     wasmMaskedText = allocZstrFromJs(maskedText);
     outRestoredPtrPtr = wasm.aifw_malloc(4);
-    const rcRestore = wasm.aifw_session_restore(sess.handle, wasmMaskedText.ptr, outRestoredPtrPtr);
+    const rcRestore = wasm.aifw_session_restore_with_meta(sess.handle, wasmMaskedText.ptr, maskMetaPtr, outRestoredPtrPtr);
     if (rcRestore !== 0) throw new Error(`restore failed rc=${rcRestore}`);
     const restoredPtr = new DataView(wasm.memory.buffer).getUint32(outRestoredPtrPtr, true);
     const restoredStr = readZstr(restoredPtr);

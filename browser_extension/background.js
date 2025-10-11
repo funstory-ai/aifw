@@ -34,10 +34,10 @@ async function ensureOffscreen() {
   throw new Error('offscreen not ready')
 }
 
-async function offscreenCall(cmd, text) {
+async function offscreenCall(cmd, text, meta) {
   await ensureOffscreen()
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ _aifw: true, cmd, text }, (resp) => resolve(resp))
+    chrome.runtime.sendMessage({ _aifw: true, cmd, text, meta }, (resp) => resolve(resp))
   })
 }
 
@@ -75,14 +75,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'ANON') {
     (async () => {
       const resp = await offscreenCall('mask', msg.text || '')
-      if (resp?.ok) sendResponse({ ok: true, data: { text: resp.text } })
+      if (resp?.ok) sendResponse({ ok: true, data: { text: resp.text, meta: resp.meta } })
       else sendResponse({ ok: false, error: resp?.error || 'unknown' })
     })()
     return true
   }
   if (msg.type === 'RESTORE') {
     (async () => {
-      const resp = await offscreenCall('restore', msg.text || '')
+      const resp = await offscreenCall('restore', msg.text || '', msg.meta)
       if (resp?.ok) sendResponse({ ok: true, data: { text: resp.text } })
       else sendResponse({ ok: false, error: resp?.error || 'unknown' })
     })()
