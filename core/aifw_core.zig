@@ -604,6 +604,8 @@ pub const Session = struct {
                 .ner_entity_count = @intCast(ner_entities.len),
             },
         } })).mask;
+        // Avoid leaking masked_text from the mask path; caller will free spans.
+        self.allocator.free(std.mem.span(mask_result.masked_text));
         return mask_result.mask_meta_data.matched_pii_spans;
     }
 
@@ -657,7 +659,6 @@ test "session mask/restore" {
     try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
 }
 
-// (replaced below)
 test "session mask/restore with meta" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
@@ -684,6 +685,31 @@ test "session mask/restore with meta" {
     errdefer std.debug.print("restored={s}\n", .{restored_text});
 
     try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
+}
+
+test "session get PII spans" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) std.log.warn("[core-lib] allocator leak detected", .{});
+    }
+    const allocator = gpa.allocator();
+
+    const session = try Session.create(allocator, .{ .ner_recog_type = .token_classification });
+    defer session.destroy();
+
+    const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
+    const ner_entities = [_]NerRecogEntity{
+        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
+    };
+    const expected_pii_spans = &[_]MatchedPIISpan{
+        .{ .entity_id = 1, .entity_type = .EMAIL_ADDRESS, .matched_start = 12, .matched_end = 25 },
+        .{ .entity_id = 2, .entity_type = .URL_ADDRESS, .matched_start = 36, .matched_end = 56 },
+        .{ .entity_id = 3, .entity_type = .USER_MAME, .matched_start = 68, .matched_end = 77 },
+    };
+    const pii_spans = try session.get_pii_spans(input, &ner_entities);
+    defer allocator.free(pii_spans);
+    try std.testing.expectEqualSlices(MatchedPIISpan, expected_pii_spans, pii_spans);
 }
 
 /// Global allocator selection
