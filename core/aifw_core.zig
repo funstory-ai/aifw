@@ -87,79 +87,139 @@ pub const MaskMetaData = struct {
     /// The matched_start and matched_end is a index in original_text
     matched_pii_spans: []const MatchedPIISpan,
 
+    /// The matched_pii_spans is owned by the MaskMetaData, if is_owned_pii_spans is true,
+    /// then it must to free the matched_pii_spans in deinit function.
+    is_owned_pii_spans: bool,
+
     pub fn deinit(self: *const MaskMetaData, allocator: std.mem.Allocator) void {
-        allocator.free(self.matched_pii_spans);
+        if (self.is_owned_pii_spans) {
+            allocator.free(self.matched_pii_spans);
+        }
     }
 };
 
 fn serialize_mask_meta_data(allocator: std.mem.Allocator, mask_meta_data: MaskMetaData) ![]u8 {
-    // Layout: [u32 total_len][u32 text_len][text][padding][spans]
-    const header_len: usize = @sizeOf(u32) + @sizeOf(u32);
-    const text_len: usize = mask_meta_data.referenced_text.len;
-    const spans_bytes: usize = @sizeOf(MatchedPIISpan) * mask_meta_data.matched_pii_spans.len;
+    // serialized MaskMetaData layout:
+    // [u32 total_len][u32 text_len][text bytes][padding][spans]
+    // - text bytes are concatenation of matched slices
+    // - spans aligned to @alignOf(MatchedPIISpan) from offset 4 + 4 + text_len
+
+    // Calculate the serialized MaskMetaData length and allocate the buffer
     const span_align = @alignOf(MatchedPIISpan);
-    const after_text: usize = header_len + text_len;
-    const padding: usize = std.mem.alignForward(usize, after_text, span_align) - after_text;
-    const init_len: u32 = @intCast(header_len + text_len + padding + spans_bytes);
-    var buf = try std.ArrayList(u8).initCapacity(allocator, init_len);
-    const size_slice = buf.addManyAsSliceAssumeCapacity(@sizeOf(u32));
-    const size_fixed: *[4]u8 = @ptrCast(size_slice.ptr);
-    std.mem.writeInt(u32, size_fixed, init_len, .little);
-    const text_len_slice = buf.addManyAsSliceAssumeCapacity(@sizeOf(u32));
-    const text_len_fixed: *[4]u8 = @ptrCast(text_len_slice.ptr);
-    std.mem.writeInt(u32, text_len_fixed, @intCast(mask_meta_data.referenced_text.len), .little);
-    buf.appendSliceAssumeCapacity(mask_meta_data.referenced_text);
-    if (padding > 0) {
-        const pad_slice = buf.addManyAsSliceAssumeCapacity(padding);
-        @memset(pad_slice, 0);
-    }
+    const spans_count = mask_meta_data.matched_pii_spans.len;
+    const spans_bytes: usize = @sizeOf(MatchedPIISpan) * spans_count;
+
+    var total_span_text_len: usize = 0;
     for (mask_meta_data.matched_pii_spans) |span| {
-        const span_slice = buf.addManyAsSliceAssumeCapacity(@sizeOf(MatchedPIISpan));
-        const span_bytes: []const u8 = std.mem.asBytes(&span);
-        @memcpy(span_slice, span_bytes);
+        const span_text_len = span.matched_end - span.matched_start;
+        total_span_text_len += span_text_len;
     }
-    return buf.items;
+    const concated_text_len: usize = total_span_text_len;
+
+    const buf_len = @sizeOf(u32) + @sizeOf(u32) + concated_text_len + span_align + spans_bytes;
+    var serialized_mask_meta_data = try allocator.alloc(u8, buf_len);
+    errdefer allocator.free(serialized_mask_meta_data);
+
+    // write buf_len and text_len
+    const buf_len_slize = serialized_mask_meta_data[0..@sizeOf(u32)];
+    const buf_len_fixed: *[@sizeOf(u32)]u8 = @ptrCast(buf_len_slize.ptr);
+    std.mem.writeInt(u32, buf_len_fixed, @intCast(buf_len), .little);
+
+    const text_len_slize = serialized_mask_meta_data[@sizeOf(u32) .. @sizeOf(u32) + @sizeOf(u32)];
+    const text_len_fixed: *[@sizeOf(u32)]u8 = @ptrCast(text_len_slize.ptr);
+    std.mem.writeInt(u32, text_len_fixed, @intCast(concated_text_len), .little);
+
+    // Compute sizes for layout
+    const header_len: usize = @sizeOf(u32) + @sizeOf(u32); // u32 buf_len and u32 text_len
+    const concated_text = serialized_mask_meta_data[header_len .. header_len + concated_text_len];
+    const spans_start: usize = std.mem.alignForward(usize, header_len + concated_text_len, span_align);
+    const spans_byte_ptr: [*]u8 = serialized_mask_meta_data.ptr + spans_start;
+    const spans_ptr: [*]MatchedPIISpan = @ptrCast(@alignCast(spans_byte_ptr));
+    const remapped_spans: []MatchedPIISpan = spans_ptr[0..spans_count];
+    const total_len = spans_start + spans_bytes;
+    std.debug.assert(total_len <= buf_len);
+
+    // Remap spans to the concatenated text
+    var cursor: usize = 0;
+    for (mask_meta_data.matched_pii_spans, 0..) |span, i| {
+        const s: usize = span.matched_start;
+        const e: usize = span.matched_end;
+        const span_text_len = e - s;
+        if (e > s and e <= mask_meta_data.referenced_text.len) {
+            const slice = mask_meta_data.referenced_text[s..e];
+            @memcpy(concated_text[cursor .. cursor + slice.len], slice);
+        }
+        remapped_spans[i] = .{
+            .entity_id = span.entity_id,
+            .entity_type = span.entity_type,
+            .matched_start = @intCast(cursor),
+            .matched_end = @intCast(cursor + span_text_len),
+        };
+        cursor += span_text_len;
+    }
+
+    return serialized_mask_meta_data;
 }
 
-fn deserialize_mask_meta_data(allocator: std.mem.Allocator, serialized_mask_meta_data: []const u8) MaskMetaData {
-    _ = allocator; // no allocation needed; spans reference serialized buffer
-    // Serialized layout:
-    // [0..4): total_len (u32, little-endian)
-    // [4..8): text_len  (u32, little-endian)
-    // [8..8+text_len): referenced_text bytes
-    // [8+text_len..): MatchedPIISpan array bytes
+fn deserialize_mask_meta_data(serialized_mask_meta_data: []const u8) MaskMetaData {
+    // serialized MaskMetaData layout:
+    // [u32 total_len][u32 text_len][text bytes][padding][spans]
+    // - text bytes are concatenation of matched slices
+    // - spans aligned to @alignOf(MatchedPIISpan) from offset 4 + 4 + text_len
 
-    if (serialized_mask_meta_data.len < 8) {
+    if (serialized_mask_meta_data.len < 4) {
         return MaskMetaData{
             .referenced_text = &[_]u8{},
             .matched_pii_spans = &[_]MatchedPIISpan{},
+            .is_owned_pii_spans = false,
         };
     }
 
-    const total_len_u32 = std.mem.readInt(u32, serialized_mask_meta_data[0..4], .little);
-    // Prefer the actual provided slice length to guard against malformed total_len
-    const buf_len: usize = serialized_mask_meta_data.len;
-    _ = total_len_u32; // total length already enforced by caller in restore_with_meta
+    const buf_len = std.mem.readInt(u32, serialized_mask_meta_data[0..@sizeOf(u32)], .little);
+    const total_len: usize = serialized_mask_meta_data.len;
+    std.debug.assert(buf_len == total_len);
 
-    const text_len_u32 = std.mem.readInt(u32, serialized_mask_meta_data[4..8], .little);
-    const text_len: usize = @intCast(text_len_u32);
+    const text_len: usize = std.mem.readInt(u32, serialized_mask_meta_data[@sizeOf(u32) .. @sizeOf(u32) + @sizeOf(u32)], .little);
+    const text_start: usize = @sizeOf(u32) + @sizeOf(u32);
+    const text_end: usize = text_start + text_len;
+    std.debug.assert(text_end < total_len);
+    if (text_end >= total_len) {
+        std.log.warn("[deserialize_mask_meta_data] text_end > total_len: text_end={d} total_len={d}", .{ text_end, total_len });
+        return MaskMetaData{
+            .referenced_text = &[_]u8{},
+            .matched_pii_spans = &[_]MatchedPIISpan{},
+            .is_owned_pii_spans = false,
+        };
+    }
 
-    const header_len: usize = @sizeOf(u32) + @sizeOf(u32);
-    const text_start: usize = header_len;
-    const text_end: usize = if (text_start + text_len <= buf_len) text_start + text_len else buf_len;
-    const referenced_text = serialized_mask_meta_data[text_start..text_end];
+    const span_align = @alignOf(MatchedPIISpan);
+    const spans_start: usize = std.mem.alignForward(usize, text_end, span_align);
+    std.debug.assert(spans_start < total_len);
+    if ((spans_start >= total_len) or (spans_start + @sizeOf(MatchedPIISpan) > total_len)) {
+        std.log.warn("[deserialize_mask_meta_data] spans_start >= total_len or not enough space for span: spans_start={d} total_len={d}", .{ spans_start, total_len });
+        return MaskMetaData{
+            .referenced_text = &[_]u8{},
+            .matched_pii_spans = &[_]MatchedPIISpan{},
+            .is_owned_pii_spans = false,
+        };
+    }
 
-    const spans_bytes_start: usize = std.mem.alignForward(usize, text_end, @alignOf(MatchedPIISpan));
-    const spans_bytes_len: usize = if (spans_bytes_start <= buf_len) buf_len - spans_bytes_start else 0;
     const span_size: usize = @sizeOf(MatchedPIISpan);
-    const spans_count: usize = if (span_size == 0) 0 else spans_bytes_len / span_size;
+    const available: usize = total_len - spans_start;
+    std.debug.assert(available >= span_size);
 
+    const referenced_text = serialized_mask_meta_data[text_start..text_end];
+    const spans_count: usize = if (span_size == 0) 0 else available / span_size;
     const base_ptr: [*]const u8 = serialized_mask_meta_data.ptr;
-    const first_byte_ptr: [*]const u8 = base_ptr + spans_bytes_start;
-    const typed_ptr_const: [*]const MatchedPIISpan = @ptrCast(@alignCast(first_byte_ptr));
-    const spans: []const MatchedPIISpan = typed_ptr_const[0..spans_count];
+    const spans_byte_ptr: [*]const u8 = base_ptr + spans_start;
+    const spans_ptr: [*]const MatchedPIISpan = @ptrCast(@alignCast(spans_byte_ptr));
+    const spans: []const MatchedPIISpan = spans_ptr[0..spans_count];
 
-    return MaskMetaData{ .referenced_text = referenced_text, .matched_pii_spans = spans };
+    return MaskMetaData{
+        .referenced_text = referenced_text,
+        .matched_pii_spans = spans,
+        .is_owned_pii_spans = false,
+    };
 }
 
 pub const MaskInitArgs = struct {
@@ -361,6 +421,7 @@ pub const MaskPipeline = struct {
                 .mask_meta_data = .{
                     .referenced_text = original_text,
                     .matched_pii_spans = try matched_pii_spans.toOwnedSlice(self.allocator),
+                    .is_owned_pii_spans = true,
                 },
             },
         };
@@ -557,15 +618,17 @@ pub const Session = struct {
         } })).restore.restored_text;
     }
 
-    pub fn restore_with_meta(self: *Session, text: [*:0]const u8, mask_meta_data: *const anyopaque) ![*:0]u8 {
-        const serialized_mask_meta_data_ptr = @as([*]const u8, @ptrCast(@alignCast(mask_meta_data)));
+    pub fn restore_with_meta(self: *Session, text: [*:0]const u8, mask_meta_data_ptr: *const anyopaque) ![*:0]u8 {
+        const serialized_mask_meta_data_ptr = @as([*]const u8, @ptrCast(@alignCast(mask_meta_data_ptr)));
         const len = std.mem.readInt(u32, serialized_mask_meta_data_ptr[0..4], .little);
         const serialized_mask_meta_data = serialized_mask_meta_data_ptr[0..len];
         defer self.allocator.free(serialized_mask_meta_data);
+        const mask_meta_data = deserialize_mask_meta_data(serialized_mask_meta_data);
+        defer mask_meta_data.deinit(self.allocator);
 
         return (try self.getPipeline(.restore).run(.{ .restore = .{
             .masked_text = text,
-            .mask_meta_data = deserialize_mask_meta_data(self.allocator, serialized_mask_meta_data),
+            .mask_meta_data = mask_meta_data,
         } })).restore.restored_text;
     }
 };
@@ -585,12 +648,12 @@ test "session mask/restore" {
         .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
     };
     const masked_text = try session.mask(input, &ner_entities);
-    std.debug.print("masked={s}\n", .{masked_text});
     defer allocator.free(std.mem.span(masked_text));
 
     const restored_text = try session.restore(masked_text);
-    std.debug.print("restored={s}\n", .{restored_text});
     defer allocator.free(std.mem.span(restored_text));
+    errdefer std.debug.print("masked={s}\n", .{masked_text});
+    errdefer std.debug.print("restored={s}\n", .{restored_text});
     try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
 }
 
@@ -617,6 +680,8 @@ test "session mask/restore with meta" {
 
     const restored_text = try session.restore_with_meta(masked_text, out_meta_ptr);
     defer allocator.free(std.mem.span(restored_text));
+    errdefer std.debug.print("masked={s}\n", .{masked_text});
+    errdefer std.debug.print("restored={s}\n", .{restored_text});
 
     try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
 }
