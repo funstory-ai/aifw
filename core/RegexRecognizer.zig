@@ -8,9 +8,9 @@ extern fn aifw_regex_find(
     re: *anyopaque,
     hay_ptr: [*]const u8,
     hay_len: usize,
-    start: usize,
-    out_start: *usize,
-    out_end: *usize,
+    start: u32,
+    out_start: *u32,
+    out_end: *u32,
 ) c_int;
 const RegexRecognizer = @This();
 
@@ -87,10 +87,10 @@ pub fn run(self: *const RegexRecognizer, input: []const u8) ![]RecogEntity {
     std.log.debug("[regex] run type={s} compiled={d}", .{ @tagName(self.supported_entity_type), self.compiled_regexs.len });
     for (self.compiled_regexs) |c| {
         std.log.debug("[regex] try pattern: {s} / {s}", .{ c.name, c.pattern_text });
-        var pos: usize = 0;
+        var pos: u32 = 0;
         while (pos <= input.len) {
-            var s: usize = 0;
-            var e: usize = 0;
+            var s: u32 = 0;
+            var e: u32 = 0;
             const rc = aifw_regex_find(c.re, input.ptr, input.len, pos, &s, &e);
             if (rc < 0) break; // error
             if (rc == 0) break; // no more

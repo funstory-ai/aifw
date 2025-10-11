@@ -29,8 +29,8 @@ pub const EntityBioTag = enum(u8) {
 
 pub const RecogEntity = struct {
     entity_type: EntityType = .None,
-    start: usize,
-    end: usize,
+    start: u32,
+    end: u32,
     score: f32,
     description: ?[]const u8,
 };

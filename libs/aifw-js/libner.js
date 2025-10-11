@@ -251,8 +251,14 @@ export function buildNerEntitiesBuffer(wasm, items, textLen) {
   };
   const BioTag = { None: 0, Begin: 1, Inside: 2 };
 
-  const toCore = (e) => (typeof e === 'string' && (e.startsWith('B-') || e.startsWith('I-'))) ? e.slice(2) : String(e || 'MISC');
-  const toTag = (e) => (typeof e === 'string' && e.startsWith('B-')) ? BioTag.Begin : BioTag.Inside;
+  // Return tuple: [coreLabel, bioTag]
+  const toCoreAndTag = (e) => {
+    const s = String(e || '');
+    if (s.startsWith('B-')) return [s.slice(2), BioTag.Begin];
+    if (s.startsWith('I-')) return [s.slice(2), BioTag.Inside];
+    if (s) return [s, BioTag.None];
+    return ['MISC', BioTag.None];
+  };
   const toEntityType = (core) => {
     switch (core) {
       case 'PER': return EntityType.USER_MAME;
@@ -268,9 +274,8 @@ export function buildNerEntitiesBuffer(wasm, items, textLen) {
     let s = Math.max(0, Math.min(textLen, Number(it.start || 0)));
     let e = Math.max(s, Math.min(textLen, Number(it.end || 0)));
     const base = arrPtr + i * structSize;
-    const entityCore = toCore(it.entity);
+    const [entityCore, tagVal] = toCoreAndTag(it.entity);
     const entityTypeVal = toEntityType(entityCore);
-    const tagVal = toTag(it.entity);
 
     dv.setUint8(base + 0, entityTypeVal);
     dv.setUint8(base + 1, tagVal);

@@ -37,11 +37,11 @@ pub const NerRecogEntity = extern struct {
     /// The score of the entity
     score: f32,
     /// The index of the token in tokenized tokens from text
-    index: usize,
+    index: u32,
     /// The start index of the entity
-    start: usize,
+    start: u32,
     /// The end index of the entity
-    end: usize,
+    end: u32,
 };
 
 pub fn create(allocator: std.mem.Allocator, ner_recog_type: NerRecogType) !*NerRecognizer {

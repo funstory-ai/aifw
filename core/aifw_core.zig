@@ -54,25 +54,113 @@ pub const RecogEntity = entity.RecogEntity;
 pub const EntityType = entity.EntityType;
 pub const NerRecogEntity = NerRecognizer.NerRecogEntity;
 
+pub const MatchedPIISpan = extern struct {
+    /// The entity_id is the id of the PII entity, it's unique within the placeholder_dict.
+    entity_id: u32,
+    /// The entity_type is the type of the PII entity.
+    entity_type: EntityType,
+
+    /// The matched_start and matched_end is the range of the matched text in the original text.
+    /// The matched text is the substring of the original text[matched_start..matched_end].
+    matched_start: u32,
+    matched_end: u32,
+};
+
 pub const PlaceholderMatchedPair = struct {
     // The entity_id and entity_type is placeholder's information
     entity_id: u32,
     entity_type: EntityType,
 
-    // The matched_text is the text that matches the placeholder,
-    // which is just a substring of the original text, no copy is made.
+    /// The matched text is substring of original text, it is pointer to serialed data
     matched_text: []const u8,
 };
 
 pub const MaskMetaData = struct {
-    // The placeholder_dict is a dictionary of placeholder and matched text,
-    // the key is the placeholder, the value is the matched text.
-    placeholder_dict: []PlaceholderMatchedPair,
+    /// The referenced_text is referenced by PII span in matched_pii_spans, the
+    /// matched_start and matched_end are index in referenced_text. It's used to
+    /// restore the masked_text.
+    /// The referenced_text maybe a original text input by the user, or maybe a
+    /// serialized PlaceholderMatchedPairs.
+    referenced_text: []const u8,
+
+    /// The PII spans slice, every PII span is recognized by RegexRecognizer or NerRecognizer.
+    /// The matched_start and matched_end is a index in original_text
+    matched_pii_spans: []const MatchedPIISpan,
 
     pub fn deinit(self: *const MaskMetaData, allocator: std.mem.Allocator) void {
-        allocator.free(self.placeholder_dict);
+        allocator.free(self.matched_pii_spans);
     }
 };
+
+fn serialize_mask_meta_data(allocator: std.mem.Allocator, mask_meta_data: MaskMetaData) ![]u8 {
+    // Layout: [u32 total_len][u32 text_len][text][padding][spans]
+    const header_len: usize = @sizeOf(u32) + @sizeOf(u32);
+    const text_len: usize = mask_meta_data.referenced_text.len;
+    const spans_bytes: usize = @sizeOf(MatchedPIISpan) * mask_meta_data.matched_pii_spans.len;
+    const span_align = @alignOf(MatchedPIISpan);
+    const after_text: usize = header_len + text_len;
+    const padding: usize = std.mem.alignForward(usize, after_text, span_align) - after_text;
+    const init_len: u32 = @intCast(header_len + text_len + padding + spans_bytes);
+    var buf = try std.ArrayList(u8).initCapacity(allocator, init_len);
+    const size_slice = buf.addManyAsSliceAssumeCapacity(@sizeOf(u32));
+    const size_fixed: *[4]u8 = @ptrCast(size_slice.ptr);
+    std.mem.writeInt(u32, size_fixed, init_len, .little);
+    const text_len_slice = buf.addManyAsSliceAssumeCapacity(@sizeOf(u32));
+    const text_len_fixed: *[4]u8 = @ptrCast(text_len_slice.ptr);
+    std.mem.writeInt(u32, text_len_fixed, @intCast(mask_meta_data.referenced_text.len), .little);
+    buf.appendSliceAssumeCapacity(mask_meta_data.referenced_text);
+    if (padding > 0) {
+        const pad_slice = buf.addManyAsSliceAssumeCapacity(padding);
+        @memset(pad_slice, 0);
+    }
+    for (mask_meta_data.matched_pii_spans) |span| {
+        const span_slice = buf.addManyAsSliceAssumeCapacity(@sizeOf(MatchedPIISpan));
+        const span_bytes: []const u8 = std.mem.asBytes(&span);
+        @memcpy(span_slice, span_bytes);
+    }
+    return buf.items;
+}
+
+fn deserialize_mask_meta_data(allocator: std.mem.Allocator, serialized_mask_meta_data: []const u8) MaskMetaData {
+    _ = allocator; // no allocation needed; spans reference serialized buffer
+    // Serialized layout:
+    // [0..4): total_len (u32, little-endian)
+    // [4..8): text_len  (u32, little-endian)
+    // [8..8+text_len): referenced_text bytes
+    // [8+text_len..): MatchedPIISpan array bytes
+
+    if (serialized_mask_meta_data.len < 8) {
+        return MaskMetaData{
+            .referenced_text = &[_]u8{},
+            .matched_pii_spans = &[_]MatchedPIISpan{},
+        };
+    }
+
+    const total_len_u32 = std.mem.readInt(u32, serialized_mask_meta_data[0..4], .little);
+    // Prefer the actual provided slice length to guard against malformed total_len
+    const buf_len: usize = serialized_mask_meta_data.len;
+    _ = total_len_u32; // total length already enforced by caller in restore_with_meta
+
+    const text_len_u32 = std.mem.readInt(u32, serialized_mask_meta_data[4..8], .little);
+    const text_len: usize = @intCast(text_len_u32);
+
+    const header_len: usize = @sizeOf(u32) + @sizeOf(u32);
+    const text_start: usize = header_len;
+    const text_end: usize = if (text_start + text_len <= buf_len) text_start + text_len else buf_len;
+    const referenced_text = serialized_mask_meta_data[text_start..text_end];
+
+    const spans_bytes_start: usize = std.mem.alignForward(usize, text_end, @alignOf(MatchedPIISpan));
+    const spans_bytes_len: usize = if (spans_bytes_start <= buf_len) buf_len - spans_bytes_start else 0;
+    const span_size: usize = @sizeOf(MatchedPIISpan);
+    const spans_count: usize = if (span_size == 0) 0 else spans_bytes_len / span_size;
+
+    const base_ptr: [*]const u8 = serialized_mask_meta_data.ptr;
+    const first_byte_ptr: [*]const u8 = base_ptr + spans_bytes_start;
+    const typed_ptr_const: [*]const MatchedPIISpan = @ptrCast(@alignCast(first_byte_ptr));
+    const spans: []const MatchedPIISpan = typed_ptr_const[0..spans_count];
+
+    return MaskMetaData{ .referenced_text = referenced_text, .matched_pii_spans = spans };
+}
 
 pub const MaskInitArgs = struct {
     regex_list: []const RegexRecognizer,
@@ -234,8 +322,8 @@ pub const MaskPipeline = struct {
         // 5) Anonymizer: build masked text with placeholders
         var out_buf = try std.ArrayList(u8).initCapacity(self.allocator, original_text.len);
         errdefer out_buf.deinit(self.allocator);
-        var placeholder_dict = try std.ArrayList(PlaceholderMatchedPair).initCapacity(self.allocator, final_spans.len);
-        errdefer placeholder_dict.deinit(self.allocator);
+        var matched_pii_spans = try std.ArrayList(MatchedPIISpan).initCapacity(self.allocator, final_spans.len);
+        errdefer matched_pii_spans.deinit(self.allocator);
 
         var pos: usize = 0;
         var idx: u32 = 0;
@@ -253,10 +341,11 @@ pub const MaskPipeline = struct {
             const entity_id = idx + 1;
             const ph_text = try writePlaceholder(ph_buf[0..], final_spans[idx].entity_type, entity_id);
             try out_buf.appendSlice(self.allocator, ph_text);
-            try placeholder_dict.append(self.allocator, .{
+            try matched_pii_spans.append(self.allocator, .{
                 .entity_id = entity_id,
                 .entity_type = final_spans[idx].entity_type,
-                .matched_text = original_text[span_start..span_end],
+                .matched_start = span_start,
+                .matched_end = span_end,
             });
             pos = span_end;
         }
@@ -265,12 +354,13 @@ pub const MaskPipeline = struct {
         // add sentinel for masked text
         try out_buf.append(self.allocator, 0);
         const masked_text = try out_buf.toOwnedSlice(self.allocator);
-        std.log.debug("[mask] done, out_len={d}, placeholders={d}", .{ masked_text.len, placeholder_dict.items.len });
+        std.log.debug("[mask] done, out_len={d}, placeholders={d}", .{ masked_text.len, matched_pii_spans.items.len });
         return .{
             .mask = .{
                 .masked_text = @as([*:0]u8, @ptrCast(masked_text.ptr)),
                 .mask_meta_data = .{
-                    .placeholder_dict = try placeholder_dict.toOwnedSlice(self.allocator),
+                    .referenced_text = original_text,
+                    .matched_pii_spans = try matched_pii_spans.toOwnedSlice(self.allocator),
                 },
             },
         };
@@ -292,11 +382,11 @@ pub const RestorePipeline = struct {
     pub fn run(self: *const RestorePipeline, args: RestoreArgs) !PipelineResult {
         // naive restore: sequentially replace placeholders with originals in order
         const masked_text = std.mem.span(args.masked_text);
-        std.log.debug("[restore] begin masked_len={d} placeholders={d}", .{ masked_text.len, args.mask_meta_data.placeholder_dict.len });
+        std.log.debug("[restore] begin masked_len={d} spans_count={d}", .{ masked_text.len, args.mask_meta_data.matched_pii_spans.len });
         var out = try std.ArrayList(u8).initCapacity(self.allocator, masked_text.len);
         defer out.deinit(self.allocator);
         var pos: usize = 0;
-        for (args.mask_meta_data.placeholder_dict) |item| {
+        for (args.mask_meta_data.matched_pii_spans) |item| {
             if (pos < masked_text.len) {
                 // find placeholder occurrence from current pos
                 var ph_buf: [PLACEHOLDER_MAX_LEN]u8 = undefined;
@@ -304,7 +394,7 @@ pub const RestorePipeline = struct {
                 const found = std.mem.indexOfPos(u8, masked_text, pos, ph_text);
                 if (found) |ph_pos| {
                     if (ph_pos > pos) try out.appendSlice(self.allocator, masked_text[pos..ph_pos]);
-                    try out.appendSlice(self.allocator, item.matched_text);
+                    try out.appendSlice(self.allocator, args.mask_meta_data.referenced_text[item.matched_start..item.matched_end]);
                     pos = ph_pos + ph_text.len;
                 } else {
                     std.log.warn("[restore] placeholder not found: entity_id={d}", .{item.entity_id});
@@ -425,6 +515,37 @@ pub const Session = struct {
         return mask_result.masked_text;
     }
 
+    pub fn mask_and_out_meta(self: *Session, text: [*:0]const u8, ner_entities: []const NerRecogEntity, out_mask_meta_data: **anyopaque) ![*:0]u8 {
+        const mask_result = (try self.getPipeline(.mask).run(.{ .mask = .{
+            .original_text = text,
+            .ner_data = .{
+                .text = text,
+                .ner_entities = ner_entities.ptr,
+                .ner_entity_count = @intCast(ner_entities.len),
+            },
+        } })).mask;
+        const serialized_mask_meta_data = try serialize_mask_meta_data(self.allocator, mask_result.mask_meta_data);
+        out_mask_meta_data.* = @alignCast(@as(*anyopaque, @ptrCast(serialized_mask_meta_data.ptr)));
+        mask_result.mask_meta_data.deinit(self.allocator);
+        return mask_result.masked_text;
+    }
+
+    /// Get matched PII spans that recognized by RegexRecognizer and NerRecognizer.
+    /// The matched_start and matched_end is index in parameter text. So you must
+    /// keep alive the parameter text when you use the returned PII spans.
+    /// You must free the returned PII spans when you no longer using it.
+    pub fn get_pii_spans(self: *Session, text: [*:0]const u8, ner_entities: []const NerRecogEntity) ![]const MatchedPIISpan {
+        const mask_result = (try self.getPipeline(.mask).run(.{ .mask = .{
+            .original_text = text,
+            .ner_data = .{
+                .text = text,
+                .ner_entities = ner_entities.ptr,
+                .ner_entity_count = @intCast(ner_entities.len),
+            },
+        } })).mask;
+        return mask_result.mask_meta_data.matched_pii_spans;
+    }
+
     pub fn restore(self: *Session, text: [*:0]const u8) ![*:0]u8 {
         defer {
             self.mask_meta_data.?.deinit(self.allocator);
@@ -433,6 +554,18 @@ pub const Session = struct {
         return (try self.getPipeline(.restore).run(.{ .restore = .{
             .masked_text = text,
             .mask_meta_data = self.mask_meta_data.?,
+        } })).restore.restored_text;
+    }
+
+    pub fn restore_with_meta(self: *Session, text: [*:0]const u8, mask_meta_data: *const anyopaque) ![*:0]u8 {
+        const serialized_mask_meta_data_ptr = @as([*]const u8, @ptrCast(@alignCast(mask_meta_data)));
+        const len = std.mem.readInt(u32, serialized_mask_meta_data_ptr[0..4], .little);
+        const serialized_mask_meta_data = serialized_mask_meta_data_ptr[0..len];
+        defer self.allocator.free(serialized_mask_meta_data);
+
+        return (try self.getPipeline(.restore).run(.{ .restore = .{
+            .masked_text = text,
+            .mask_meta_data = deserialize_mask_meta_data(self.allocator, serialized_mask_meta_data),
         } })).restore.restored_text;
     }
 };
@@ -458,6 +591,33 @@ test "session mask/restore" {
     const restored_text = try session.restore(masked_text);
     std.debug.print("restored={s}\n", .{restored_text});
     defer allocator.free(std.mem.span(restored_text));
+    try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
+}
+
+// (replaced below)
+test "session mask/restore with meta" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) std.log.warn("[core-lib] allocator leak detected", .{});
+    }
+    const allocator = gpa.allocator();
+
+    const session = try Session.create(allocator, .{ .ner_recog_type = .token_classification });
+    defer session.destroy();
+
+    const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
+    const ner_entities = [_]NerRecogEntity{
+        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
+    };
+
+    var out_meta_ptr: *anyopaque = undefined;
+    const masked_text = try session.mask_and_out_meta(input, &ner_entities, &out_meta_ptr);
+    defer allocator.free(std.mem.span(masked_text));
+
+    const restored_text = try session.restore_with_meta(masked_text, out_meta_ptr);
+    defer allocator.free(std.mem.span(restored_text));
+
     try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
 }
 
@@ -519,6 +679,7 @@ pub export fn aifw_session_destroy(session_ptr: *allowzero anyopaque) void {
     session.destroy();
 }
 
+/// Mask the text, return the masked text
 pub export fn aifw_session_mask(
     session_ptr: *allowzero anyopaque,
     c_text: [*:0]const u8,
@@ -539,6 +700,55 @@ pub export fn aifw_session_mask(
     return 0;
 }
 
+/// Mask the text, return the masked text and the mask meta data
+pub export fn aifw_session_mask_and_out_meta(
+    session_ptr: *allowzero anyopaque,
+    c_text: [*:0]const u8,
+    ner_entities: [*c]const NerRecogEntity,
+    ner_entity_count: u32,
+    out_masked_text: *[*:0]u8,
+    out_mask_meta_data: **anyopaque,
+) u16 {
+    if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
+
+    const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
+    const ner_entities_slice = if (ner_entity_count > 0) ner_entities[0..@intCast(ner_entity_count)] else &[_]NerRecogEntity{};
+    const masked_text = session.mask_and_out_meta(c_text, ner_entities_slice, out_mask_meta_data) catch |err| {
+        std.log.err("[c-api] mask_and_out_meta failed: {s}", .{@errorName(err)});
+        return @intFromError(err);
+    };
+    out_masked_text.* = masked_text;
+    std.log.info("[c-api] mask_and_out_meta ok out_ptr=0x{x}", .{@intFromPtr(masked_text)});
+    return 0;
+}
+
+/// Get the matched PII spans from the input text and the NER entities
+/// The matched_start and matched_end is index in parameter text. So you must
+/// keep alive the parameter text when you use the returned PII spans.
+/// You must free the returned PII spans when you no longer using it.
+pub export fn aifw_session_get_pii_spans(
+    session_ptr: *allowzero anyopaque,
+    c_text: [*:0]const u8,
+    ner_entities: [*c]const NerRecogEntity,
+    ner_entity_count: u32,
+    out_pii_spans: *[*c]const MatchedPIISpan,
+    out_pii_spans_count: *u32,
+) u16 {
+    if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
+
+    const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
+    const ner_entities_slice = if (ner_entity_count > 0) ner_entities[0..@intCast(ner_entity_count)] else &[_]NerRecogEntity{};
+    const matched_pii_spans = session.get_pii_spans(c_text, ner_entities_slice) catch |err| {
+        std.log.err("[c-api] get_matched_pii_list failed: {s}", .{@errorName(err)});
+        return @intFromError(err);
+    };
+    out_pii_spans.* = matched_pii_spans.ptr;
+    out_pii_spans_count.* = @intCast(matched_pii_spans.len);
+    std.log.info("[c-api] get_matched_pii_list ok out_ptr=0x{x}", .{@intFromPtr(matched_pii_spans.ptr)});
+    return 0;
+}
+
+/// Restore the text by masked text
 pub export fn aifw_session_restore(
     session_ptr: *allowzero anyopaque,
     c_text: [*:0]const u8,
@@ -549,6 +759,28 @@ pub export fn aifw_session_restore(
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
     std.log.info("[c-api] restore enter len={d}", .{std.mem.len(c_text)});
     const restored_text = session.restore(c_text) catch |err| {
+        std.log.err("[c-api] restore failed: {s}", .{@errorName(err)});
+        return @intFromError(err);
+    };
+    out_restored_text.* = restored_text;
+    std.log.info("[c-api] restore ok out_ptr=0x{x}", .{@intFromPtr(restored_text)});
+    return 0;
+}
+
+/// Restore the text by masked text and mask meta data
+/// This function is used to restore the text by masked text and mask meta data,
+/// The mask meta data is obtained by aifw_session_mask_and_out_meta.
+pub export fn aifw_session_restore_with_meta(
+    session_ptr: *allowzero anyopaque,
+    c_text: [*:0]const u8,
+    mask_meta_data: *const anyopaque,
+    out_restored_text: *[*:0]u8,
+) u16 {
+    if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
+
+    const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
+    std.log.info("[c-api] restore enter len={d}", .{std.mem.len(c_text)});
+    const restored_text = session.restore_with_meta(c_text, mask_meta_data) catch |err| {
         std.log.err("[c-api] restore failed: {s}", .{@errorName(err)});
         return @intFromError(err);
     };
