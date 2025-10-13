@@ -496,7 +496,6 @@ pub const SessionInitArgs = extern struct {
 // If you call init() to initialize the session, you can not copy the session to another variable.
 pub const Session = struct {
     allocator: std.mem.Allocator,
-    mask_meta_data: ?MaskMetaData = null,
     ner_recognizer: NerRecognizer,
     mask_pipeline: Pipeline,
     restore_pipeline: Pipeline,
@@ -530,7 +529,6 @@ pub const Session = struct {
         // NOTE: Returning by value makes inner self-pointers unstable; use create() instead.
         self.* = .{
             .allocator = allocator,
-            .mask_meta_data = null,
             .ner_recognizer = NerRecognizer.init(allocator, init_args.ner_recog_type),
             .mask_pipeline = undefined,
             .restore_pipeline = undefined,
@@ -553,7 +551,6 @@ pub const Session = struct {
         self.mask_pipeline.deinit();
         self.restore_pipeline.deinit();
         self.ner_recognizer.deinit();
-        if (self.mask_meta_data) |meta_data| meta_data.deinit(self.allocator);
     }
 
     pub fn getPipeline(self: *Session, kind: PipelineKind) *Pipeline {
@@ -561,19 +558,6 @@ pub const Session = struct {
             .mask => &self.mask_pipeline,
             .restore => &self.restore_pipeline,
         };
-    }
-
-    pub fn mask(self: *Session, text: [*:0]const u8, ner_entities: []const NerRecogEntity) ![*:0]u8 {
-        const mask_result = (try self.getPipeline(.mask).run(.{ .mask = .{
-            .original_text = text,
-            .ner_data = .{
-                .text = text,
-                .ner_entities = ner_entities.ptr,
-                .ner_entity_count = @intCast(ner_entities.len),
-            },
-        } })).mask;
-        self.mask_meta_data = mask_result.mask_meta_data;
-        return mask_result.masked_text;
     }
 
     pub fn mask_and_out_meta(self: *Session, text: [*:0]const u8, ner_entities: []const NerRecogEntity, out_mask_meta_data: **anyopaque) ![*:0]u8 {
@@ -609,18 +593,7 @@ pub const Session = struct {
         return mask_result.mask_meta_data.matched_pii_spans;
     }
 
-    pub fn restore(self: *Session, text: [*:0]const u8) ![*:0]u8 {
-        defer {
-            self.mask_meta_data.?.deinit(self.allocator);
-            self.mask_meta_data = null;
-        }
-        return (try self.getPipeline(.restore).run(.{ .restore = .{
-            .masked_text = text,
-            .mask_meta_data = self.mask_meta_data.?,
-        } })).restore.restored_text;
-    }
-
-    pub fn restore_with_meta(self: *Session, text: [*:0]const u8, mask_meta_data_ptr: *const anyopaque) ![*:0]u8 {
+    pub fn restore_with_meta(self: *Session, masked_text: [*:0]const u8, mask_meta_data_ptr: *const anyopaque) ![*:0]u8 {
         const serialized_mask_meta_data_ptr = @as([*]const u8, @ptrCast(@alignCast(mask_meta_data_ptr)));
         const len = std.mem.readInt(u32, serialized_mask_meta_data_ptr[0..4], .little);
         const serialized_mask_meta_data = serialized_mask_meta_data_ptr[0..len];
@@ -629,35 +602,11 @@ pub const Session = struct {
         defer mask_meta_data.deinit(self.allocator);
 
         return (try self.getPipeline(.restore).run(.{ .restore = .{
-            .masked_text = text,
+            .masked_text = masked_text,
             .mask_meta_data = mask_meta_data,
         } })).restore.restored_text;
     }
 };
-
-test "session mask/restore" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        const deinit_status = gpa.deinit();
-        if (deinit_status == .leak) std.log.warn("[core-lib] allocator leak detected", .{});
-    }
-    const allocator = gpa.allocator();
-    const session = try Session.create(allocator, .{ .ner_recog_type = .token_classification });
-    defer session.destroy();
-
-    const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
-    const ner_entities = [_]NerRecogEntity{
-        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
-    };
-    const masked_text = try session.mask(input, &ner_entities);
-    defer allocator.free(std.mem.span(masked_text));
-
-    const restored_text = try session.restore(masked_text);
-    defer allocator.free(std.mem.span(restored_text));
-    errdefer std.debug.print("masked={s}\n", .{masked_text});
-    errdefer std.debug.print("restored={s}\n", .{restored_text});
-    try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
-}
 
 test "session mask/restore with meta" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -685,6 +634,35 @@ test "session mask/restore with meta" {
     errdefer std.debug.print("restored={s}\n", .{restored_text});
 
     try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
+}
+
+test "session restore_with_meta with empty masked text frees meta and returns null" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) std.log.warn("[core-lib] allocator leak detected", .{});
+    }
+    const allocator = gpa.allocator();
+
+    const session = try Session.create(allocator, .{ .ner_recog_type = .token_classification });
+    defer session.destroy();
+
+    const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
+    const ner_entities = [_]NerRecogEntity{
+        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
+    };
+
+    var out_meta_ptr: *anyopaque = undefined;
+    const masked_text = try session.mask_and_out_meta(input, &ner_entities, &out_meta_ptr);
+    defer allocator.free(std.mem.span(masked_text));
+
+    // Call exported C API restore_with_meta with empty masked text
+    const sess_ptr: *allowzero anyopaque = @ptrCast(session);
+    const empty_c_text: [*:0]const u8 = "";
+    var out_restored: [*:0]allowzero u8 = @ptrFromInt(0);
+    const rc: u16 = aifw_session_restore_with_meta(sess_ptr, empty_c_text, out_meta_ptr, &out_restored);
+    try std.testing.expect(rc == 0);
+    try std.testing.expect(@intFromPtr(out_restored) == 0);
 }
 
 test "session get PII spans" {
@@ -770,27 +748,6 @@ pub export fn aifw_session_destroy(session_ptr: *allowzero anyopaque) void {
     session.destroy();
 }
 
-/// Mask the text, return the masked text
-pub export fn aifw_session_mask(
-    session_ptr: *allowzero anyopaque,
-    c_text: [*:0]const u8,
-    ner_entities: [*c]const NerRecogEntity,
-    ner_entity_count: u32,
-    out_masked_text: *[*:0]u8,
-) u16 {
-    if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
-
-    const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
-    const ner_entities_slice = if (ner_entity_count > 0) ner_entities[0..@intCast(ner_entity_count)] else &[_]NerRecogEntity{};
-    const masked_text = session.mask(c_text, ner_entities_slice) catch |err| {
-        std.log.err("[c-api] mask failed: {s}", .{@errorName(err)});
-        return @intFromError(err);
-    };
-    out_masked_text.* = masked_text;
-    std.log.info("[c-api] mask ok out_ptr=0x{x}", .{@intFromPtr(masked_text)});
-    return 0;
-}
-
 /// Mask the text, return the masked text and the mask meta data
 pub export fn aifw_session_mask_and_out_meta(
     session_ptr: *allowzero anyopaque,
@@ -839,39 +796,30 @@ pub export fn aifw_session_get_pii_spans(
     return 0;
 }
 
-/// Restore the text by masked text
-pub export fn aifw_session_restore(
-    session_ptr: *allowzero anyopaque,
-    c_text: [*:0]const u8,
-    out_restored_text: *[*:0]u8,
-) u16 {
-    if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
-
-    const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
-    std.log.info("[c-api] restore enter len={d}", .{std.mem.len(c_text)});
-    const restored_text = session.restore(c_text) catch |err| {
-        std.log.err("[c-api] restore failed: {s}", .{@errorName(err)});
-        return @intFromError(err);
-    };
-    out_restored_text.* = restored_text;
-    std.log.info("[c-api] restore ok out_ptr=0x{x}", .{@intFromPtr(restored_text)});
-    return 0;
-}
-
 /// Restore the text by masked text and mask meta data
 /// This function is used to restore the text by masked text and mask meta data,
 /// The mask meta data is obtained by aifw_session_mask_and_out_meta.
 pub export fn aifw_session_restore_with_meta(
     session_ptr: *allowzero anyopaque,
-    c_text: [*:0]const u8,
+    masked_c_text: [*:0]const u8,
     mask_meta_data: *const anyopaque,
-    out_restored_text: *[*:0]u8,
+    out_restored_text: *[*:0]allowzero u8,
 ) u16 {
     if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
-    std.log.info("[c-api] restore enter len={d}", .{std.mem.len(c_text)});
-    const restored_text = session.restore_with_meta(c_text, mask_meta_data) catch |err| {
+    std.log.info("[c-api] restore enter len={d}", .{std.mem.len(masked_c_text)});
+    // Special case: if caller passes empty masked text, just consume/free meta and return null
+    if (std.mem.len(masked_c_text) == 0) {
+        const serialized_mask_meta_data_ptr = @as([*]const u8, @ptrCast(@alignCast(mask_meta_data)));
+        const len = std.mem.readInt(u32, serialized_mask_meta_data_ptr[0..4], .little);
+        const serialized_mask_meta_data = serialized_mask_meta_data_ptr[0..len];
+        session.allocator.free(serialized_mask_meta_data);
+        out_restored_text.* = @ptrFromInt(0);
+        std.log.info("[c-api] restore skip (empty input), freed meta", .{});
+        return 0;
+    }
+    const restored_text = session.restore_with_meta(masked_c_text, mask_meta_data) catch |err| {
         std.log.err("[c-api] restore failed: {s}", .{@errorName(err)});
         return @intFromError(err);
     };

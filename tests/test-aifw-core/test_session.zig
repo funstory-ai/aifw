@@ -4,54 +4,7 @@ const core = @import("aifw_core");
 pub fn main() !void {
     defer core.aifw_shutdown();
 
-    try test_session_mask_and_restore();
     try test_session_mask_and_restore_with_meta();
-}
-
-fn test_session_mask_and_restore() !void {
-    const session = core.aifw_session_create(&.{ .ner_recog_type = .token_classification });
-    if (@intFromPtr(session) == 0) {
-        std.log.err("failed to create session\n", .{});
-        return error.TestFailed;
-    }
-    defer core.aifw_session_destroy(session);
-
-    const input = "Hi, my email is example.test@funstory.com, my phone number is 13800138027, my name is John Doe";
-    const ner_entities = [_]core.NerRecognizer.NerRecogEntity{
-        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 14, .start = 86, .end = 90 },
-        .{ .entity_type = .USER_MAME, .entity_tag = .Inside, .score = 0.98, .index = 15, .start = 91, .end = 94 },
-    };
-    var masked_text: [*:0]u8 = undefined;
-    var err_no = core.aifw_session_mask(
-        session,
-        input,
-        &ner_entities,
-        ner_entities.len,
-        &masked_text,
-    );
-    if (err_no != 0) {
-        std.log.err("failed to mask, error={s}\n", .{core.getErrorString(err_no)});
-        return error.TestFailed;
-    }
-    defer core.aifw_string_free(masked_text);
-
-    var restored_text: [*:0]u8 = undefined;
-    err_no = core.aifw_session_restore(
-        session,
-        masked_text,
-        &restored_text,
-    );
-    if (err_no != 0) {
-        std.log.err("failed to restore, error={s}\n", .{core.getErrorString(err_no)});
-        return error.TestFailed;
-    }
-    defer core.aifw_string_free(restored_text);
-
-    std.debug.print("input_text={s}\n", .{input});
-    std.debug.print("masked_text={s}\n", .{masked_text});
-    std.debug.print("restored_text={s}\n", .{restored_text});
-
-    try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
 }
 
 fn test_session_mask_and_restore_with_meta() !void {
@@ -103,7 +56,7 @@ fn test_session_mask_and_restore_with_meta() !void {
     }
     defer core.aifw_string_free(masked_text2);
 
-    var restored_text1: [*:0]u8 = undefined;
+    var restored_text1: [*:0]allowzero u8 = undefined;
     err_no = core.aifw_session_restore_with_meta(
         session,
         masked_text1,
@@ -114,13 +67,15 @@ fn test_session_mask_and_restore_with_meta() !void {
         std.log.err("failed to restore, error={s}\n", .{core.getErrorString(err_no)});
         return error.TestFailed;
     }
-    defer core.aifw_string_free(restored_text1);
+    try std.testing.expect(@intFromPtr(restored_text1) != 0);
+    const restored_text1_nonzero = @as([*:0]u8, @ptrCast(restored_text1));
+    defer core.aifw_string_free(@as([*:0]u8, @ptrCast(restored_text1_nonzero)));
     std.debug.print("input_text1={s}\n", .{input1});
     std.debug.print("masked_text1={s}\n", .{masked_text1});
-    std.debug.print("restored_text1={s}\n", .{restored_text1});
-    try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text1), input1));
+    std.debug.print("restored_text1={s}\n", .{restored_text1_nonzero});
+    try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text1_nonzero), input1));
 
-    var restored_text2: [*:0]u8 = undefined;
+    var restored_text2: [*:0]allowzero u8 = undefined;
     err_no = core.aifw_session_restore_with_meta(
         session,
         masked_text2,
@@ -131,9 +86,11 @@ fn test_session_mask_and_restore_with_meta() !void {
         std.log.err("failed to restore, error={s}\n", .{core.getErrorString(err_no)});
         return error.TestFailed;
     }
-    defer core.aifw_string_free(restored_text2);
+    try std.testing.expect(@intFromPtr(restored_text2) != 0);
+    const restored_text2_nonzero = @as([*:0]u8, @ptrCast(restored_text2));
+    defer core.aifw_string_free(@as([*:0]u8, @ptrCast(restored_text2_nonzero)));
     std.debug.print("input_text2={s}\n", .{input2});
     std.debug.print("masked_text2={s}\n", .{masked_text2});
-    std.debug.print("restored_text2={s}\n", .{restored_text2});
-    try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text2), input2));
+    std.debug.print("restored_text2={s}\n", .{restored_text2_nonzero});
+    try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text2_nonzero), input2));
 }

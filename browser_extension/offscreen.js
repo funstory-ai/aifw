@@ -3,7 +3,6 @@ import * as aifw from './vendor/aifw-js/aifw-js.js'
 import { ensureModelCached, initAifwWithCache, defaultModelId } from './aifw-extension-sample.js'
 
 let ready = false
-let sess = null
 let lastMetas = null
 
 async function ensureReady() {
@@ -20,32 +19,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       try {
         await ensureReady()
         if (msg.cmd === 'mask') {
-          if (!sess) sess = await aifw.createSession()
           const text = msg.text || ''
           const lines = text.split(/\r?\n/)
-          const masked = []
+          const maskedLines = []
           const metas = []
           for (const line of lines) {
-            const [m, meta] = await aifw.maskText(sess, line)
-            masked.push(m)
+            const [masked, meta] = await aifw.maskText(line)
+            maskedLines.push(masked)
             metas.push(meta)
           }
           lastMetas = metas
-          sendResponse({ ok: true, text: masked.join('\n'), meta: metas })
+          sendResponse({ ok: true, text: maskedLines.join('\n'), meta: metas })
         } else if (msg.cmd === 'restore') {
-          if (!sess) { sendResponse({ ok: false, error: 'No active session. Run Mask first.' }); return; }
           const text = msg.text || ''
           const metas = Array.isArray(msg.meta) ? msg.meta : (lastMetas || [])
           const lines = text.split(/\r?\n/)
-          const restored = []
+          const restoredLines = []
           for (let i=0;i<lines.length;i++) {
-            const rest = await aifw.restoreText(sess, lines[i], metas[i])
-            restored.push(rest)
+            const restored = await aifw.restoreText(lines[i], metas[i])
+            restoredLines.push(restored)
           }
           lastMetas = null
-          sendResponse({ ok: true, text: restored.join('\n') })
-          await aifw.destroySession(sess)
-          sess = null
+          sendResponse({ ok: true, text: restoredLines.join('\n') })
         } else {
           sendResponse({ ok: false, error: 'unknown cmd' })
         }
@@ -56,3 +51,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true
   }
 })
+
+// Ensure Zig core shutdown when offscreen document is closed
+function shutdownOnce(){
+  if (!ready) return
+  try { aifw.deinit() } catch {}
+  ready = false
+  lastMetas = null
+}
+
+window.addEventListener('pagehide', shutdownOnce, { once: true })
+window.addEventListener('beforeunload', shutdownOnce, { once: true })

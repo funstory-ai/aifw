@@ -23,21 +23,18 @@ async function main() {
   window.addEventListener('beforeunload', shutdownOnce, { once: true });
 
   runBtn.addEventListener('click', async () => {
-    let sess = null;
     try {
       statusEl.textContent = 'Running...';
       maskedEl.textContent = '';
       restoredEl.textContent = '';
-
-      sess = await aifw.createSession();
 
       const textStr = textEl.value || '';
       const lines = textStr.split(/\r?\n/);
       const maskedLines = [];
       const metas = [];
       for (const line of lines) {
-        const [m, meta] = await aifw.maskText(sess, line);
-        maskedLines.push(m);
+        const [masked, meta] = await aifw.maskText(line);
+        maskedLines.push(masked);
         metas.push(meta);
       }
       const maskedStr = maskedLines.join('\n');
@@ -45,17 +42,26 @@ async function main() {
 
       const restoredLines = [];
       for (let i = 0; i < maskedLines.length; i++) {
-        const rest = await aifw.restoreText(sess, maskedLines[i], metas[i]);
+        const rest = await aifw.restoreText(maskedLines[i], metas[i]);
         restoredLines.push(rest);
       }
       const restoredStr = restoredLines.join('\n');
       restoredEl.textContent = restoredStr;
 
+      // Test restore with empty masked text for just freeing meta, should return empty string
+      try {
+        const test_text = "Hi, my email is example.test@funstory.com, my phone number is 13800138027, my name is John Doe";
+        const [masked, meta] = await aifw.maskText(test_text);
+        const emptied = await aifw.restoreText('', meta);
+        // Expect empty string; log for debug without affecting UI
+        console.log('[webapp] empty-restore result length:', emptied.length);
+      } catch (e) {
+        console.warn('[webapp] empty-restore check failed:', e);
+      }
+
       statusEl.textContent = 'Done';
     } catch (e) {
       statusEl.textContent = `Error: ${e.message || e}`;
-    } finally {
-      if (sess) await aifw.destroySession(sess);
     }
   });
 }

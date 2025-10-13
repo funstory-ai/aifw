@@ -1,3 +1,4 @@
+let session = null;
 let wasm = null;
 let nerLib = null;
 let ner = null;
@@ -73,17 +74,21 @@ export async function init({ wasmBase = '/wasm/', modelsBase = '/models/' }) {
 
   const modelId = 'funstory-ai/neurobert-mini';
   ner = await nerLib.buildNerPipeline(modelId, { quantized: true });
+
+  session = await createSession();
 }
 
 export async function deinit() {
+  if (session) await destroySession(session);
   wasm.aifw_shutdown();
   // nothing special; GC will collect JS objects
+  session = null;
   ner = null;
   nerLib = null;
   wasm = null;
 }
 
-export async function createSession() {
+async function createSession() {
   if (!wasm) throw new Error('AIFW not initialized');
   // default ner_recog_type = token_classification (0)
   const initBuf = new Uint8Array(4);
@@ -91,50 +96,42 @@ export async function createSession() {
   new Uint8Array(wasm.memory.buffer, initAlloc, initBuf.length).set(initBuf);
   new DataView(wasm.memory.buffer).setUint32(initAlloc + 0, 0, true);
 
-  let sess = {};
+  let session = {};
   try {
-    sess.handle = wasm.aifw_session_create(initAlloc);
-    if (!sess.handle) throw new Error('session_create failed');
+    session.handle = wasm.aifw_session_create(initAlloc);
+    if (!session.handle) throw new Error('session_create failed');
   } finally {
     // init buffer can be freed immediately after creation
     freeBuf(initAlloc, initBuf.length);
   }
-  sess.zig_text = null;
-  return sess;
+  return session;
 }
 
-export async function destroySession(sess) {
-  if (!wasm || !sess?.handle) throw new Error('invalid session handle');
+async function destroySession(session) {
+  if (!wasm || !session?.handle) throw new Error('invalid session handle');
   try {
-    wasm.aifw_session_destroy(sess.handle);
+    wasm.aifw_session_destroy(session.handle);
   } finally {
-    sess.handle = 0;
-    if (sess.zig_text) {
-      freeBuf(sess.zig_text.ptr, sess.zig_text.size);
-      sess.zig_text = null;
-    }
+    session.handle = 0;
   }
 }
 
-export async function maskText(sess, inputText) {
-  if (!wasm || !sess?.handle) throw new Error('invalid session handle');
+export async function maskText(inputText) {
+  if (!wasm || !session?.handle) throw new Error('invalid session handle');
   if (!ner) throw new Error('NER pipeline not ready');
 
-  if (sess.zig_text) {
-    freeBuf(sess.zig_text.ptr, sess.zig_text.size);
-    sess.zig_text = null;
-  }
+  let zig_text = null;
   let nerBuf = null;
   let outMaskedPtrPtr = 0;
   let outMaskMetaPtrPtr = 0;
   try {
-    sess.zig_text = allocZstrFromJs(inputText);
+    zig_text = allocZstrFromJs(inputText);
     const items = await ner.run(inputText);
     nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText.length);
 
     outMaskedPtrPtr = wasm.aifw_malloc(4);
     outMaskMetaPtrPtr = wasm.aifw_malloc(4);
-    const rcMask = wasm.aifw_session_mask_and_out_meta(sess.handle, sess.zig_text.ptr, nerBuf.ptr, nerBuf.count >>> 0, outMaskedPtrPtr, outMaskMetaPtrPtr);
+    const rcMask = wasm.aifw_session_mask_and_out_meta(session.handle, zig_text.ptr, nerBuf.ptr, nerBuf.count >>> 0, outMaskedPtrPtr, outMaskMetaPtrPtr);
     if (rcMask !== 0) throw new Error(`mask failed rc=${rcMask}`);
     const maskedPtr = new DataView(wasm.memory.buffer).getUint32(outMaskedPtrPtr, true);
     const maskedStr = readZstr(maskedPtr);
@@ -147,23 +144,24 @@ export async function maskText(sess, inputText) {
     if (outMaskMetaPtrPtr) freeBuf(outMaskMetaPtrPtr, 4);
     if (nerBuf?.ptr) freeBuf(nerBuf.ptr, nerBuf.byteSize);
     if (nerBuf?.owned) for (const s of nerBuf.owned) freeBuf(s.ptr, s.size);
+    if (zig_text) freeBuf(zig_text.ptr, zig_text.size);
   }
 }
 
-export async function restoreText(sess, maskedText, maskMetaPtr) {
-  if (!wasm || !sess?.handle) throw new Error('invalid session');
+export async function restoreText(maskedText, maskMetaPtr) {
+  if (!wasm || !session?.handle) throw new Error('invalid session');
 
   let wasmMaskedText = null;
   let outRestoredPtrPtr = 0;
   try {
     wasmMaskedText = allocZstrFromJs(maskedText);
     outRestoredPtrPtr = wasm.aifw_malloc(4);
-    const rcRestore = wasm.aifw_session_restore_with_meta(sess.handle, wasmMaskedText.ptr, maskMetaPtr, outRestoredPtrPtr);
+    const rcRestore = wasm.aifw_session_restore_with_meta(session.handle, wasmMaskedText.ptr, maskMetaPtr, outRestoredPtrPtr);
     if (rcRestore !== 0) throw new Error(`restore failed rc=${rcRestore}`);
     const restoredPtr = new DataView(wasm.memory.buffer).getUint32(outRestoredPtrPtr, true);
-    const restoredStr = readZstr(restoredPtr);
-    // free restored core string after copying out
-    wasm.aifw_string_free(restoredPtr);
+    const restoredStr = restoredPtr ? readZstr(restoredPtr) : '';
+    // free restored core string after copying out (if non-null)
+    if (restoredPtr) wasm.aifw_string_free(restoredPtr);
     return restoredStr;
   } finally {
     if (outRestoredPtrPtr) freeBuf(outRestoredPtrPtr, 4);
