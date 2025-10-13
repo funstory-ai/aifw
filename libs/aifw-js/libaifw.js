@@ -4,19 +4,19 @@ let nerLib = null;
 let ner = null;
 
 // Helpers
-function allocZstrFromJs(str) {
+function allocZigStrFromJs(str) {
   const enc = new TextEncoder();
   const bytes = enc.encode(str || '');
-  const buf = new Uint8Array(bytes.length + 1);
-  buf.set(bytes, 0);
-  buf[bytes.length] = 0;
-  const ptr = wasm.aifw_malloc(buf.length);
+  const size = bytes.length + 1;
+  const ptr = wasm.aifw_malloc(size);
   if (!ptr) throw new Error('aifw_malloc failed');
-  new Uint8Array(wasm.memory.buffer, ptr, buf.length).set(buf);
-  return { ptr, size: buf.length };
+  const mem = new Uint8Array(wasm.memory.buffer, ptr, size);
+  mem.set(bytes, 0);
+  mem[bytes.length] = 0; // NUL terminator
+  return { ptr, size };
 }
 
-function readZstr(ptr) {
+function readZigStr(ptr) {
   const mem = new Uint8Array(wasm.memory.buffer);
   let end = ptr;
   while (mem[end] !== 0) end++;
@@ -125,7 +125,7 @@ export async function maskText(inputText) {
   let outMaskedPtrPtr = 0;
   let outMaskMetaPtrPtr = 0;
   try {
-    zig_text = allocZstrFromJs(inputText);
+    zig_text = allocZigStrFromJs(inputText);
     const items = await ner.run(inputText);
     nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText.length);
 
@@ -134,11 +134,18 @@ export async function maskText(inputText) {
     const rcMask = wasm.aifw_session_mask_and_out_meta(session.handle, zig_text.ptr, nerBuf.ptr, nerBuf.count >>> 0, outMaskedPtrPtr, outMaskMetaPtrPtr);
     if (rcMask !== 0) throw new Error(`mask failed rc=${rcMask}`);
     const maskedPtr = new DataView(wasm.memory.buffer).getUint32(outMaskedPtrPtr, true);
-    const maskedStr = readZstr(maskedPtr);
+    const maskedStr = readZigStr(maskedPtr);
     // free masked core string after copying out
     wasm.aifw_string_free(maskedPtr);
     const maskMetaPtr = new DataView(wasm.memory.buffer).getUint32(outMaskMetaPtrPtr, true);
-    return [maskedStr, maskMetaPtr];
+    const dv = new DataView(wasm.memory.buffer);
+    const metaLen = dv.getUint32(maskMetaPtr, true);
+    const src = new Uint8Array(wasm.memory.buffer, maskMetaPtr, metaLen);
+    const maskMeta = new Uint8Array(metaLen);
+    maskMeta.set(src);
+    // free core-owned serialized meta buffer after copying out
+    freeBuf(maskMetaPtr, metaLen);
+    return [maskedStr, maskMeta];
   } finally {
     if (outMaskedPtrPtr) freeBuf(outMaskedPtrPtr, 4);
     if (outMaskMetaPtrPtr) freeBuf(outMaskMetaPtrPtr, 4);
@@ -148,23 +155,33 @@ export async function maskText(inputText) {
   }
 }
 
-export async function restoreText(maskedText, maskMetaPtr) {
+export async function restoreText(maskedText, maskMeta) {
   if (!wasm || !session?.handle) throw new Error('invalid session');
 
   let wasmMaskedText = null;
   let outRestoredPtrPtr = 0;
+  let wasmMetaPtr = 0;
+  let wasmMetaSize = 0;
   try {
-    wasmMaskedText = allocZstrFromJs(maskedText);
+    wasmMaskedText = allocZigStrFromJs(maskedText);
+    // Prepare serialized meta in WASM memory
+    const metaBytes = (maskMeta instanceof Uint8Array) ? maskMeta : new Uint8Array(maskMeta);
+    if (metaBytes.length < 4) throw new Error('invalid maskMeta');
+    wasmMetaSize = metaBytes.length;
+    wasmMetaPtr = wasm.aifw_malloc(wasmMetaSize);
+    if (!wasmMetaPtr) throw new Error('aifw_malloc failed (meta)');
+    new Uint8Array(wasm.memory.buffer, wasmMetaPtr, wasmMetaSize).set(metaBytes);
     outRestoredPtrPtr = wasm.aifw_malloc(4);
-    const rcRestore = wasm.aifw_session_restore_with_meta(session.handle, wasmMaskedText.ptr, maskMetaPtr, outRestoredPtrPtr);
+    const rcRestore = wasm.aifw_session_restore_with_meta(session.handle, wasmMaskedText.ptr, wasmMetaPtr, outRestoredPtrPtr);
     if (rcRestore !== 0) throw new Error(`restore failed rc=${rcRestore}`);
     const restoredPtr = new DataView(wasm.memory.buffer).getUint32(outRestoredPtrPtr, true);
-    const restoredStr = restoredPtr ? readZstr(restoredPtr) : '';
+    const restoredStr = restoredPtr ? readZigStr(restoredPtr) : '';
     // free restored core string after copying out (if non-null)
     if (restoredPtr) wasm.aifw_string_free(restoredPtr);
     return restoredStr;
   } finally {
     if (outRestoredPtrPtr) freeBuf(outRestoredPtrPtr, 4);
     if (wasmMaskedText) freeBuf(wasmMaskedText.ptr, wasmMaskedText.size);
+    // Note: serialized meta is freed by core during restore_with_meta
   }
 }
