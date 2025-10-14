@@ -59,6 +59,14 @@ async function main() {
         console.warn('[webapp] empty-restore check failed:', e);
       }
 
+      // Test getPiiSpans API on the original input
+      try {
+        const spans = await aifw.getPiiSpans(textStr);
+        console.log('[webapp] getPiiSpans spans:', spans);
+      } catch (e) {
+        console.warn('[webapp] getPiiSpans failed:', e);
+      }
+
       statusEl.textContent = 'Done';
     } catch (e) {
       statusEl.textContent = `Error: ${e.message || e}`;

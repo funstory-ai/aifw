@@ -4,6 +4,14 @@ let nerLib = null;
 let ner = null;
 
 // Helpers
+export class MatchedPIISpan {
+  constructor(entity_id, entity_type, matched_start, matched_end) {
+    this.entity_id = entity_id >>> 0;
+    this.entity_type = entity_type >>> 0;
+    this.matched_start = matched_start >>> 0;
+    this.matched_end = matched_end >>> 0;
+  }
+}
 function allocZigStrFromJs(str) {
   const enc = new TextEncoder();
   const bytes = enc.encode(str || '');
@@ -120,29 +128,28 @@ export async function maskText(inputText) {
   if (!wasm || !session?.handle) throw new Error('invalid session handle');
   if (!ner) throw new Error('NER pipeline not ready');
 
-  let zig_text = null;
+  let zigInputText = null;
   let nerBuf = null;
   let outMaskedPtrPtr = 0;
   let outMaskMetaPtrPtr = 0;
   try {
-    zig_text = allocZigStrFromJs(inputText);
+    zigInputText = allocZigStrFromJs(inputText);
     const items = await ner.run(inputText);
     nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText.length);
 
     outMaskedPtrPtr = wasm.aifw_malloc(4);
     outMaskMetaPtrPtr = wasm.aifw_malloc(4);
-    const rcMask = wasm.aifw_session_mask_and_out_meta(session.handle, zig_text.ptr, nerBuf.ptr, nerBuf.count >>> 0, outMaskedPtrPtr, outMaskMetaPtrPtr);
+    const rcMask = wasm.aifw_session_mask_and_out_meta(session.handle, zigInputText.ptr, nerBuf.ptr, nerBuf.count >>> 0, outMaskedPtrPtr, outMaskMetaPtrPtr);
     if (rcMask !== 0) throw new Error(`mask failed rc=${rcMask}`);
     const maskedPtr = new DataView(wasm.memory.buffer).getUint32(outMaskedPtrPtr, true);
     const maskedStr = readZigStr(maskedPtr);
     // free masked core string after copying out
     wasm.aifw_string_free(maskedPtr);
     const maskMetaPtr = new DataView(wasm.memory.buffer).getUint32(outMaskMetaPtrPtr, true);
-    const dv = new DataView(wasm.memory.buffer);
-    const metaLen = dv.getUint32(maskMetaPtr, true);
-    const src = new Uint8Array(wasm.memory.buffer, maskMetaPtr, metaLen);
+    const metaLen = new DataView(wasm.memory.buffer).getUint32(maskMetaPtr, true);
     const maskMeta = new Uint8Array(metaLen);
-    maskMeta.set(src);
+    const zigMaskMeta = new Uint8Array(wasm.memory.buffer, maskMetaPtr, metaLen);
+    maskMeta.set(zigMaskMeta);
     // free core-owned serialized meta buffer after copying out
     freeBuf(maskMetaPtr, metaLen);
     return [maskedStr, maskMeta];
@@ -151,28 +158,28 @@ export async function maskText(inputText) {
     if (outMaskMetaPtrPtr) freeBuf(outMaskMetaPtrPtr, 4);
     if (nerBuf?.ptr) freeBuf(nerBuf.ptr, nerBuf.byteSize);
     if (nerBuf?.owned) for (const s of nerBuf.owned) freeBuf(s.ptr, s.size);
-    if (zig_text) freeBuf(zig_text.ptr, zig_text.size);
+    if (zigInputText) freeBuf(zigInputText.ptr, zigInputText.size);
   }
 }
 
 export async function restoreText(maskedText, maskMeta) {
   if (!wasm || !session?.handle) throw new Error('invalid session');
 
-  let wasmMaskedText = null;
+  let zigMaskedText = null;
   let outRestoredPtrPtr = 0;
-  let wasmMetaPtr = 0;
-  let wasmMetaSize = 0;
+  let zigMaskMetaPtr = 0;
+  let zigMaskMetaSize = 0;
   try {
-    wasmMaskedText = allocZigStrFromJs(maskedText);
+    zigMaskedText = allocZigStrFromJs(maskedText);
     // Prepare serialized meta in WASM memory
     const metaBytes = (maskMeta instanceof Uint8Array) ? maskMeta : new Uint8Array(maskMeta);
     if (metaBytes.length < 4) throw new Error('invalid maskMeta');
-    wasmMetaSize = metaBytes.length;
-    wasmMetaPtr = wasm.aifw_malloc(wasmMetaSize);
-    if (!wasmMetaPtr) throw new Error('aifw_malloc failed (meta)');
-    new Uint8Array(wasm.memory.buffer, wasmMetaPtr, wasmMetaSize).set(metaBytes);
+    zigMaskMetaSize = metaBytes.length;
+    zigMaskMetaPtr = wasm.aifw_malloc(zigMaskMetaSize);
+    if (!zigMaskMetaPtr) throw new Error('aifw_malloc failed (meta)');
+    new Uint8Array(wasm.memory.buffer, zigMaskMetaPtr, zigMaskMetaSize).set(metaBytes);
     outRestoredPtrPtr = wasm.aifw_malloc(4);
-    const rcRestore = wasm.aifw_session_restore_with_meta(session.handle, wasmMaskedText.ptr, wasmMetaPtr, outRestoredPtrPtr);
+    const rcRestore = wasm.aifw_session_restore_with_meta(session.handle, zigMaskedText.ptr, zigMaskMetaPtr, outRestoredPtrPtr);
     if (rcRestore !== 0) throw new Error(`restore failed rc=${rcRestore}`);
     const restoredPtr = new DataView(wasm.memory.buffer).getUint32(outRestoredPtrPtr, true);
     const restoredStr = restoredPtr ? readZigStr(restoredPtr) : '';
@@ -181,7 +188,55 @@ export async function restoreText(maskedText, maskMeta) {
     return restoredStr;
   } finally {
     if (outRestoredPtrPtr) freeBuf(outRestoredPtrPtr, 4);
-    if (wasmMaskedText) freeBuf(wasmMaskedText.ptr, wasmMaskedText.size);
-    // Note: serialized meta is freed by core during restore_with_meta
+    if (zigMaskedText) freeBuf(zigMaskedText.ptr, zigMaskedText.size);
+    // Note: serialized zigMaskMetaPtr is freed by core during restore_with_meta
+  }
+}
+
+// Get PII spans for a given text using current NER output
+export async function getPiiSpans(inputText) {
+  if (!wasm || !session?.handle) throw new Error('invalid session handle');
+  if (!ner) throw new Error('NER pipeline not ready');
+
+  let zigInputText = null;
+  let nerBuf = null;
+  let outSpansPtrPtr = 0;
+  let outCountPtr = 0;
+  try {
+    zigInputText = allocZigStrFromJs(inputText);
+    const items = await ner.run(inputText);
+    nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText.length);
+
+    outSpansPtrPtr = wasm.aifw_malloc(4);
+    outCountPtr = wasm.aifw_malloc(4);
+    const rc = wasm.aifw_session_get_pii_spans(session.handle, zigInputText.ptr, nerBuf.ptr, nerBuf.count >>> 0, outSpansPtrPtr, outCountPtr);
+    if (rc !== 0) throw new Error(`get_pii_spans failed rc=${rc}`);
+    const dv = new DataView(wasm.memory.buffer);
+    const spansPtr = dv.getUint32(outSpansPtrPtr, true);
+    const count = dv.getUint32(outCountPtr, true);
+    // Layout (extern struct): u32 entity_id, u8 entity_type, 3-byte padding, u32 matched_start, u32 matched_end
+    const spanSize = 4 + 1 + 3 + 4 + 4; // 16 bytes
+    // Read as raw bytes and parse
+    const spanBytes = new Uint8Array(wasm.memory.buffer, spansPtr, count * spanSize);
+    const res = [];
+    const dvSpan = new DataView(spanBytes.buffer, spanBytes.byteOffset, spanBytes.byteLength);
+    for (let i = 0; i < count; i++) {
+      const base = i * spanSize;
+      const entity_id = dvSpan.getUint32(base + 0, true);
+      const entity_type = dvSpan.getUint8(base + 4);
+      const matched_start = dvSpan.getUint32(base + 8, true);
+      const matched_end = dvSpan.getUint32(base + 12, true);
+      res.push(new MatchedPIISpan(entity_id, entity_type, matched_start, matched_end));
+    }
+    // Free spans buffer allocated by aifw core
+    if (spansPtr && count) freeBuf(spansPtr, count * spanSize);
+    // aifw core may free spans later; caller only reads
+    return res;
+  } finally {
+    if (outSpansPtrPtr) freeBuf(outSpansPtrPtr, 4);
+    if (outCountPtr) freeBuf(outCountPtr, 4);
+    if (nerBuf?.ptr) freeBuf(nerBuf.ptr, nerBuf.byteSize);
+    if (nerBuf?.owned) for (const s of nerBuf.owned) freeBuf(s.ptr, s.size);
+    if (zigInputText) freeBuf(zigInputText.ptr, zigInputText.size);
   }
 }
