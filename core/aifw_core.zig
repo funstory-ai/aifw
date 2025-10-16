@@ -440,33 +440,63 @@ pub const RestorePipeline = struct {
         _ = self;
     }
 
+    const PlaceHolderPIIText = struct {
+        // ph_start and ph_end are references to masked_text
+        ph_start: u32,
+        ph_end: u32,
+
+        // The matched substirng in original text
+        matched_text: []const u8,
+    };
+
     pub fn run(self: *const RestorePipeline, args: RestoreArgs) !PipelineResult {
         // naive restore: sequentially replace placeholders with originals in order
         const masked_text = std.mem.span(args.masked_text);
         std.log.debug("[restore] begin masked_len={d} spans_count={d}", .{ masked_text.len, args.mask_meta_data.matched_pii_spans.len });
-        var out = try std.ArrayList(u8).initCapacity(self.allocator, masked_text.len);
-        defer out.deinit(self.allocator);
-        var pos: usize = 0;
-        for (args.mask_meta_data.matched_pii_spans) |item| {
-            if (pos < masked_text.len) {
-                // find placeholder occurrence from current pos
-                var ph_buf: [PLACEHOLDER_MAX_LEN]u8 = undefined;
-                const ph_text = try writePlaceholder(ph_buf[0..], item.entity_type, item.entity_id);
-                const found = std.mem.indexOfPos(u8, masked_text, pos, ph_text);
-                if (found) |ph_pos| {
-                    if (ph_pos > pos) try out.appendSlice(self.allocator, masked_text[pos..ph_pos]);
-                    try out.appendSlice(self.allocator, args.mask_meta_data.referenced_text[item.matched_start..item.matched_end]);
-                    pos = ph_pos + ph_text.len;
-                } else {
-                    std.log.warn("[restore] placeholder not found: entity_id={d}", .{item.entity_id});
-                }
+        const pii_spans = args.mask_meta_data.matched_pii_spans;
+        const spans_len: usize = pii_spans.len;
+        var ph_pii_maps = try self.allocator.alloc(PlaceHolderPIIText, spans_len);
+        defer self.allocator.free(ph_pii_maps);
+        var ph_total_len: usize = 0;
+        for (pii_spans, 0..) |span, i| {
+            // Regenerate the placeholder text from entity_type and entity_id
+            var ph_buf: [PLACEHOLDER_MAX_LEN]u8 = undefined;
+            const ph_text = try writePlaceholder(ph_buf[0..], span.entity_type, span.entity_id);
+            ph_total_len += ph_text.len;
+            // Build map of placeholder and masked_text, the ph_start and ph_end
+            // should reference to masked_text
+            const found = std.mem.indexOfPos(u8, masked_text, 0, ph_text);
+            if (found) |ph_start| {
+                ph_pii_maps[i].ph_start = @intCast(ph_start);
+                ph_pii_maps[i].ph_end = @intCast(ph_start + ph_text.len);
+                ph_pii_maps[i].matched_text = args.mask_meta_data.referenced_text[span.matched_start..span.matched_end];
+            } else {
+                std.log.warn("[restore] placeholder not found: entity_id={d}", .{span.entity_id});
             }
         }
-        if (pos < masked_text.len) try out.appendSlice(self.allocator, masked_text[pos..]);
+        std.sort.pdq(PlaceHolderPIIText, ph_pii_maps[0..pii_spans.len], {}, struct {
+            fn lessThan(_: void, a: PlaceHolderPIIText, b: PlaceHolderPIIText) bool {
+                return a.ph_start < b.ph_start;
+            }
+        }.lessThan);
+
+        var pos: u32 = 0;
+        var out = try std.ArrayList(u8).initCapacity(
+            self.allocator,
+            masked_text.len + args.mask_meta_data.referenced_text.len - ph_total_len + 1,
+        );
+        defer out.deinit(self.allocator);
+        for (ph_pii_maps[0..spans_len]) |item| {
+            if (item.ph_start > pos) out.appendSliceAssumeCapacity(masked_text[pos..item.ph_start]);
+            out.appendSliceAssumeCapacity(item.matched_text);
+            pos = item.ph_end;
+        }
+        if (pos < masked_text.len) out.appendSliceAssumeCapacity(masked_text[pos..]);
 
         // add sentinel for restored text
-        try out.append(self.allocator, 0);
-        const restored_text = try out.toOwnedSlice(self.allocator);
+        out.appendAssumeCapacity(0);
+        const restored_text = out.items;
+        out = std.ArrayList(u8).empty; // reset to empty list
         std.log.debug("[restore] done, out_len={d}", .{restored_text.len});
         return .{ .restore = .{ .restored_text = @as([*:0]u8, @ptrCast(restored_text.ptr)) } };
     }
@@ -628,12 +658,35 @@ test "session mask/restore with meta" {
     const masked_text = try session.mask_and_out_meta(input, &ner_entities, &out_meta_ptr);
     defer allocator.free(std.mem.span(masked_text));
 
+    // Copy out meta BEFORE first restore because restore_with_meta frees the out_meta_ptr
+    const out_meta_bytes = @as([*]const u8, @ptrCast(@alignCast(out_meta_ptr)));
+    const out_meta_len = std.mem.readInt(u32, out_meta_bytes[0..4], .little);
+    const out_meta2_bytes = try allocator.dupe(u8, out_meta_bytes[0..out_meta_len]);
+
     const restored_text = try session.restore_with_meta(masked_text, out_meta_ptr);
     defer allocator.free(std.mem.span(restored_text));
     errdefer std.debug.print("masked={s}\n", .{masked_text});
     errdefer std.debug.print("restored={s}\n", .{restored_text});
-
     try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
+
+    const mask_meta = deserialize_mask_meta_data(out_meta2_bytes);
+    defer mask_meta.deinit(allocator);
+    var i: usize = 0;
+    // Shuffle the span order to test out-of-order spans in restore_with_meta
+    while (i + 1 < mask_meta.matched_pii_spans.len) {
+        var span = mask_meta.matched_pii_spans[i];
+        var next_span = mask_meta.matched_pii_spans[i + 1];
+        const temp_span = span;
+        span = next_span;
+        next_span = temp_span;
+        i += 2;
+    }
+    const out_meta_ptr2 = @as(*anyopaque, @ptrCast(@alignCast(out_meta2_bytes.ptr)));
+    const restored_text2 = try session.restore_with_meta(masked_text, out_meta_ptr2);
+    defer allocator.free(std.mem.span(restored_text2));
+    errdefer std.debug.print("masked={s}\n", .{masked_text});
+    errdefer std.debug.print("restored={s}\n", .{restored_text2});
+    try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text2), input));
 }
 
 test "session restore_with_meta with empty masked text frees meta and returns null" {
@@ -692,22 +745,31 @@ test "session get PII spans" {
 
 /// Global allocator selection
 /// - Debug (hosted): GeneralPurposeAllocator
-/// - Freestanding: FixedBufferAllocator
-/// - Release hosted: page_allocator
+/// - Freestanding: page_allocator (WASM)
+/// - Release hosted: SmpAllocator
 const is_debug = builtin.mode == .Debug;
 
-const HEAP_SIZE: usize = if (is_freestanding) 8 * 1024 * 1024 else 0; // 8 MiB for freestanding
-var fb_mem: [HEAP_SIZE]u8 align(16) = undefined;
-
+const HEAP_SIZE: usize = 0; // unused now
 var gpa_inst = if (is_freestanding)
-    std.heap.FixedBufferAllocator.init(&fb_mem)
+    // For wasm32-freestanding, prefer page_allocator which is thread-safe
+    std.heap.page_allocator
 else if (is_debug)
     std.heap.GeneralPurposeAllocator(.{}){}
 else
     std.heap.SmpAllocator{};
 
+// Serialize API entry points to make allocator usage thread-safe in WASM
+var api_mutex: std.Thread.Mutex = .{};
+const SHOULD_LOCK_API: bool = is_freestanding or is_debug;
+
 fn globalAllocator() std.mem.Allocator {
-    return gpa_inst.allocator();
+    if (is_freestanding) {
+        return gpa_inst; // page_allocator is already an Allocator
+    } else if (is_debug) {
+        return gpa_inst.allocator();
+    } else {
+        return gpa_inst.allocator();
+    }
 }
 
 fn globalAllocatorDeinit() void {
@@ -725,11 +787,19 @@ pub export fn getErrorString(err_no: u16) [*:0]const u8 {
 /// ----- C wrapper for Session -----
 /// Call this function before the program exits, and call this function only once.
 pub export fn aifw_shutdown() void {
+    if (SHOULD_LOCK_API) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
+    }
     RegexRecognizer.shutdownCache();
     globalAllocatorDeinit();
 }
 
 pub export fn aifw_session_create(init_args: *const SessionInitArgs) *allowzero anyopaque {
+    if (SHOULD_LOCK_API) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
+    }
     const allocator = globalAllocator();
     std.log.info("[c-api] session_create", .{});
     const session = Session.create(allocator, init_args.*) catch {
@@ -741,6 +811,10 @@ pub export fn aifw_session_create(init_args: *const SessionInitArgs) *allowzero 
 }
 
 pub export fn aifw_session_destroy(session_ptr: *allowzero anyopaque) void {
+    if (SHOULD_LOCK_API) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
+    }
     if (@intFromPtr(session_ptr) == 0) return;
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
@@ -757,6 +831,10 @@ pub export fn aifw_session_mask_and_out_meta(
     out_masked_text: *[*:0]u8,
     out_mask_meta_data: **anyopaque,
 ) u16 {
+    if (SHOULD_LOCK_API) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
+    }
     if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
@@ -782,6 +860,10 @@ pub export fn aifw_session_get_pii_spans(
     out_pii_spans: *[*c]const MatchedPIISpan,
     out_pii_spans_count: *u32,
 ) u16 {
+    if (SHOULD_LOCK_API) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
+    }
     if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
@@ -805,6 +887,10 @@ pub export fn aifw_session_restore_with_meta(
     mask_meta_data: *const anyopaque,
     out_restored_text: *[*:0]allowzero u8,
 ) u16 {
+    if (SHOULD_LOCK_API) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
+    }
     if (@intFromPtr(session_ptr) == 0) return @intFromError(error.InvalidSessionPtr);
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
@@ -830,6 +916,10 @@ pub export fn aifw_session_restore_with_meta(
 
 /// Free a NUL-terminated string allocated by the core (masked/restored text)
 pub export fn aifw_string_free(str: [*:0]u8) void {
+    if (SHOULD_LOCK_API) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
+    }
     globalAllocator().free(std.mem.span(str));
 }
 
@@ -840,11 +930,19 @@ pub export fn _start() void {
 
 /// WASM host buffer allocation helpers
 pub export fn aifw_malloc(n: usize) [*:0]allowzero u8 {
+    if (SHOULD_LOCK_API) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
+    }
     const slice = globalAllocator().alloc(u8, n) catch return @ptrFromInt(0);
     return @ptrCast(slice.ptr);
 }
 
 pub export fn aifw_free_sized(ptr: [*:0]allowzero u8, n: usize) void {
+    if (SHOULD_LOCK_API) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
+    }
     if (@intFromPtr(ptr) == 0) return;
     const p: [*:0]u8 = @ptrCast(ptr);
     globalAllocator().free(p[0..n]);

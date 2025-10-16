@@ -83,10 +83,15 @@ pub fn build(b: *std.Build) void {
 
     // Tests (native)
     const unit_tests = b.addTest(.{ .root_module = aifw_core_native });
+    unit_tests.root_module.strip = false;
+    unit_tests.root_module.unwind_tables = .sync;
+    unit_tests.root_module.omit_frame_pointer = false;
+    unit_tests.root_module.error_tracing = true;
     // Ensure Rust native staticlib is built before unit tests and link it
     unit_tests.step.dependOn(&cargo_native.step);
     unit_tests.addObjectFile(b.path("libs/regex/target/release/libaifw_regex.a"));
     const run_tests = b.addRunArtifact(unit_tests);
+    run_tests.setEnvironmentVariable("ZIG_BACKTRACE", "full");
 
     const test_step = b.step("test", "Run test-aifw-core");
     test_step.dependOn(&run_tests.step);
@@ -96,12 +101,20 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    integ_test_mod.strip = false;
+    integ_test_mod.unwind_tables = .sync;
+    integ_test_mod.omit_frame_pointer = false;
+    integ_test_mod.error_tracing = true;
 
     // Integration test executable (native)
     const integ = b.addExecutable(.{
         .name = "aifw_core_test",
         .root_module = integ_test_mod,
     });
+    integ.root_module.strip = false;
+    integ.root_module.unwind_tables = .sync;
+    integ.root_module.omit_frame_pointer = false;
+    integ.root_module.error_tracing = true;
     integ.root_module.addImport("aifw_core", aifw_core_native);
     // Ensure Rust native staticlib is built before integration test and link it
     integ.step.dependOn(&cargo_native.step);
@@ -109,6 +122,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(integ);
 
     const run_integ = b.addRunArtifact(integ);
+    run_integ.setEnvironmentVariable("ZIG_BACKTRACE", "full");
     const integ_step = b.step("inttest", "Run integration test executable");
     integ_step.dependOn(&run_integ.step);
 }

@@ -12,6 +12,7 @@ export class MatchedPIISpan {
     this.matched_end = matched_end >>> 0;
   }
 }
+
 function allocZigStrFromJs(str) {
   const enc = new TextEncoder();
   const bytes = enc.encode(str || '');
