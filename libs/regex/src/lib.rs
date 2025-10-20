@@ -124,3 +124,42 @@ pub extern "C" fn aifw_regex_find(
         None => 0,
     }
 }
+
+/// Find a specific capture group span in the haystack for the first match at or after `start`.
+/// Returns 1 if a match with the requested group was found, 0 if not, and < 0 on error.
+#[no_mangle]
+pub extern "C" fn aifw_regex_find_group(
+    ptr_re: *mut AifwRegex,
+    hay_ptr: *const c_uchar,
+    hay_len: c_ulong,
+    start: c_ulong,
+    group_index: c_ulong,
+    out_start: *mut c_ulong,
+    out_end: *mut c_ulong,
+) -> c_int {
+    if ptr_re.is_null() || hay_ptr.is_null() || out_start.is_null() || out_end.is_null() {
+        return -1;
+    }
+    let re = unsafe { &*ptr_re };
+    let hay = unsafe { slice::from_raw_parts(hay_ptr as *const u8, hay_len as usize) };
+    let s = core::cmp::min(start as usize, hay.len());
+    let sub = &hay[s..];
+    let g = group_index as usize;
+    let mut caps = re.re.create_captures();
+    re.re.captures(sub, &mut caps);
+    match caps.get_group(0) {
+        Some(_) => {
+            match caps.get_group(g) {
+                Some(m) => {
+                    unsafe {
+                        *out_start = (s + m.start) as c_ulong;
+                        *out_end = (s + m.end) as c_ulong;
+                    }
+                    1
+                }
+                None => 0,
+            }
+        }
+        None => 0,
+    }
+}

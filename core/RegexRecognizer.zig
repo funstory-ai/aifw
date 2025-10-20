@@ -12,6 +12,15 @@ extern fn aifw_regex_find(
     out_start: *u32,
     out_end: *u32,
 ) c_int;
+extern fn aifw_regex_find_group(
+    re: *anyopaque,
+    hay_ptr: [*]const u8,
+    hay_len: usize,
+    start: u32,
+    group_index: u32,
+    out_start: *u32,
+    out_end: *u32,
+) c_int;
 const RegexRecognizer = @This();
 
 allocator: std.mem.Allocator,
@@ -37,6 +46,7 @@ pub const PatternSpec = struct {
     name: []const u8,
     pattern: []const u8,
     score: f32,
+    group_index: u32,
 };
 
 const CompiledRegex = struct {
@@ -44,6 +54,7 @@ const CompiledRegex = struct {
     pattern_text: []const u8,
     re: *anyopaque,
     score: f32,
+    group_index: u32,
 };
 
 /// The specs maybe empty, if the specs is empty, the list of compiled regexs of
@@ -64,7 +75,7 @@ pub fn init(
             // Skip if this dynamic pattern is already included by the static set for this entity
             const is_exist, const re_ptr = try getCompiledForPattern(allocator, s.pattern);
             if (is_exist) continue;
-            try list.append(allocator, .{ .name = s.name, .pattern_text = s.pattern, .re = re_ptr, .score = s.score });
+            try list.append(allocator, .{ .name = s.name, .pattern_text = s.pattern, .re = re_ptr, .score = s.score, .group_index = s.group_index });
         }
     }
     return RegexRecognizer{
@@ -91,7 +102,10 @@ pub fn run(self: *const RegexRecognizer, input: []const u8) ![]RecogEntity {
         while (pos <= input.len) {
             var s: u32 = 0;
             var e: u32 = 0;
-            const rc = aifw_regex_find(c.re, input.ptr, input.len, pos, &s, &e);
+            const rc = if (c.group_index == 0)
+                aifw_regex_find(c.re, input.ptr, input.len, pos, &s, &e)
+            else
+                aifw_regex_find_group(c.re, input.ptr, input.len, pos, c.group_index, &s, &e);
             if (rc < 0) break; // error
             if (rc == 0) break; // no more
             const score = if (self.validate_result_fn) |validate_result|
@@ -129,46 +143,46 @@ pub fn presetSpecsFor(t: EntityType) []const PatternSpec {
 }
 
 const EMAIL_SPECS = [_]PatternSpec{
-    .{ .name = "EMAIL", .pattern = "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", .score = 0.90 },
+    .{ .name = "EMAIL", .pattern = "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", .score = 0.90, .group_index = 0 },
 };
 
 const URL_SPECS = [_]PatternSpec{
-    .{ .name = "URL", .pattern = "https?://[A-Za-z0-9._~:/?#\\[\\]@!$&'()*+,;=%-]+", .score = 0.80 },
+    .{ .name = "URL", .pattern = "https?://[A-Za-z0-9._~:/?#\\[\\]@!$&'()*+,;=%-]+", .score = 0.80, .group_index = 0 },
 };
 
 const PHONE_SPECS = [_]PatternSpec{
-    .{ .name = "PHONE", .pattern = "\\+?\\d[\\d -]{7,}\\d", .score = 0.70 },
+    .{ .name = "PHONE", .pattern = "\\+?\\d[\\d -]{7,}\\d", .score = 0.70, .group_index = 0 },
 };
 
 const BANK_SPECS = [_]PatternSpec{
     // 12-19 digits continuous (typical card/account length ranges)
-    .{ .name = "BANK", .pattern = "\\b\\d{12,19}\\b", .score = 0.60 },
+    .{ .name = "BANK", .pattern = "\\b\\d{12,19}\\b", .score = 0.60, .group_index = 0 },
 };
 
 const PRIVKEY_SPECS = [_]PatternSpec{
     // PEM block headers for common private keys
-    .{ .name = "PEM_PRIVKEY", .pattern = "-----BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY-----[\\s\\S]*?-----END (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY-----", .score = 0.95 },
+    .{ .name = "PEM_PRIVKEY", .pattern = "-----BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY-----[\\s\\S]*?-----END (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY-----", .score = 0.95, .group_index = 0 },
     // 64 hex chars (common raw hex private key length)
-    .{ .name = "HEX_PRIVKEY", .pattern = "\\b[0-9a-fA-F]{64}\\b", .score = 0.75 },
+    .{ .name = "HEX_PRIVKEY", .pattern = "\\b[0-9a-fA-F]{64}\\b", .score = 0.75, .group_index = 0 },
 };
 
 const VCODE_SPECS = [_]PatternSpec{
     // 4-8 digit codes
-    .{ .name = "VCODE", .pattern = "\\b\\d{4,8}\\b", .score = 0.50 },
-    // Labeled alphanumeric verification codes like: "verification code: 9F4T2A"
-    .{ .name = "VCODE_LABELED_ALNUM", .pattern = "(?i)(?:verification\\s*code|verify\\s*code|otp|2fa\\s*code|auth(?:entication)?\\s*code)\\s*[:=\\-]?\\s*[A-Za-z0-9]{4,12}", .score = 0.80 },
+    .{ .name = "VCODE", .pattern = "\\b\\d{4,8}\\b", .score = 0.50, .group_index = 0 },
+    // Labeled alphanumeric verification codes with capturing group 1 for the value
+    .{ .name = "VCODE_LABELED_ALNUM", .pattern = "(?i)\\b(?:verification\\s*code|verify\\s*code|otp|2fa\\s*code|auth(?:entication)?\\s*code)\\s*[:=\\-]?\\s*([A-Za-z0-9]{4,12})", .score = 0.80, .group_index = 1 },
 };
 
 const PASSWORD_SPECS = [_]PatternSpec{
-    // password: <non-space>, case-insensitive not used; match common literals
-    .{ .name = "PASSWORD_LITERAL", .pattern = "(?i)password\\s*[:=]\\s*\\S+", .score = 0.40 },
-    // pwd: <non-space> or common aliases
-    .{ .name = "PWD_LITERAL", .pattern = "(?i)(?:pwd|pass|passwd|passcode)\\s*[:=]\\s*\\S+", .score = 0.60 },
+    // password: <non-space>
+    .{ .name = "PASSWORD_LITERAL", .pattern = "(?i)\\bpassword\\s*[:=]\\s*(\\S+)", .score = 0.40, .group_index = 1 },
+    // pwd/pass/passwd/passcode: <non-space>
+    .{ .name = "PWD_LITERAL", .pattern = "(?i)\\b(?:pwd|pass|passwd|passcode)\\s*[:=]\\s*(\\S+)", .score = 0.60, .group_index = 1 },
 };
 
 const SEED_SPECS = [_]PatternSpec{
     // seed/mnemonic followed by 12-24 lowercase words (approximate)
-    .{ .name = "SEED_PHRASE", .pattern = "(?i)(seed|mnemonic)\\s*[:=]?\\s*([a-z]+\\s+){11,23}[a-z]+", .score = 0.70 },
+    .{ .name = "SEED_PHRASE", .pattern = "(?i)(seed|mnemonic)\\s*[:=]?\\s*([a-z]+\\s+){11,23}[a-z]+", .score = 0.70, .group_index = 0 },
 };
 
 // --- Global caches: static presets (StaticStringMap -> index -> slot) and dynamic patterns ---
@@ -238,24 +252,28 @@ fn appendStaticCompiledForEntity(
             .pattern_text = EMAIL_SPECS[0].pattern,
             .re = g_static_slots[0].?,
             .score = EMAIL_SPECS[0].score,
+            .group_index = EMAIL_SPECS[0].group_index,
         }),
         .URL_ADDRESS => try list.append(allocator, .{
             .name = URL_SPECS[0].name,
             .pattern_text = URL_SPECS[0].pattern,
             .re = g_static_slots[1].?,
             .score = URL_SPECS[0].score,
+            .group_index = URL_SPECS[0].group_index,
         }),
         .PHONE_NUMBER => try list.append(allocator, .{
             .name = PHONE_SPECS[0].name,
             .pattern_text = PHONE_SPECS[0].pattern,
             .re = g_static_slots[2].?,
             .score = PHONE_SPECS[0].score,
+            .group_index = PHONE_SPECS[0].group_index,
         }),
         .BANK_NUMBER => try list.append(allocator, .{
             .name = BANK_SPECS[0].name,
             .pattern_text = BANK_SPECS[0].pattern,
             .re = g_static_slots[3].?,
             .score = BANK_SPECS[0].score,
+            .group_index = BANK_SPECS[0].group_index,
         }),
         .PRIVATE_KEY => {
             try list.append(allocator, .{
@@ -263,12 +281,14 @@ fn appendStaticCompiledForEntity(
                 .pattern_text = PRIVKEY_SPECS[0].pattern,
                 .re = g_static_slots[4].?,
                 .score = PRIVKEY_SPECS[0].score,
+                .group_index = PRIVKEY_SPECS[0].group_index,
             });
             try list.append(allocator, .{
                 .name = PRIVKEY_SPECS[1].name,
                 .pattern_text = PRIVKEY_SPECS[1].pattern,
                 .re = g_static_slots[5].?,
                 .score = PRIVKEY_SPECS[1].score,
+                .group_index = PRIVKEY_SPECS[1].group_index,
             });
         },
         .VERIFICATION_CODE => {
@@ -277,12 +297,14 @@ fn appendStaticCompiledForEntity(
                 .pattern_text = VCODE_SPECS[0].pattern,
                 .re = g_static_slots[6].?,
                 .score = VCODE_SPECS[0].score,
+                .group_index = VCODE_SPECS[0].group_index,
             });
             try list.append(allocator, .{
                 .name = VCODE_SPECS[1].name,
                 .pattern_text = VCODE_SPECS[1].pattern,
                 .re = g_static_slots[9].?,
                 .score = VCODE_SPECS[1].score,
+                .group_index = VCODE_SPECS[1].group_index,
             });
         },
         .PASSWORD => {
@@ -291,12 +313,14 @@ fn appendStaticCompiledForEntity(
                 .pattern_text = PASSWORD_SPECS[0].pattern,
                 .re = g_static_slots[7].?,
                 .score = PASSWORD_SPECS[0].score,
+                .group_index = PASSWORD_SPECS[0].group_index,
             });
             try list.append(allocator, .{
                 .name = PASSWORD_SPECS[1].name,
                 .pattern_text = PASSWORD_SPECS[1].pattern,
                 .re = g_static_slots[10].?,
                 .score = PASSWORD_SPECS[1].score,
+                .group_index = PASSWORD_SPECS[1].group_index,
             });
         },
         .RANDOM_SEED => try list.append(allocator, .{
@@ -304,6 +328,7 @@ fn appendStaticCompiledForEntity(
             .pattern_text = SEED_SPECS[0].pattern,
             .re = g_static_slots[8].?,
             .score = SEED_SPECS[0].score,
+            .group_index = SEED_SPECS[0].group_index,
         }),
         else => {},
     }
@@ -361,6 +386,7 @@ test "regex recognizer finds simple email" {
             .name = "EMAIL",
             .pattern = "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
             .score = 0.9,
+            .group_index = 0,
         },
     };
     var rec = try RegexRecognizer.init(alloc, specs[0..], .EMAIL_ADDRESS, null);

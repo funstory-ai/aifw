@@ -690,6 +690,31 @@ test "session mask/restore with meta" {
     try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text2), input));
 }
 
+test "regex recognizer in mask/restore" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) std.log.warn("[core-lib] allocator leak detected", .{});
+    }
+    const allocator = gpa.allocator();
+
+    const session = try Session.create(allocator, .{ .ner_recog_type = .token_classification });
+    defer session.destroy();
+
+    const input = "use this temporary verification code: 9F4T2A. For the sandbox box, the pwd: S3cure!Passw0rd (I'll reset it after your tests, promise!).";
+    const ner_entities = [_]NerRecogEntity{};
+
+    var out_meta_ptr: *anyopaque = undefined;
+    const masked_text = try session.mask_and_out_meta(input, &ner_entities, &out_meta_ptr);
+    defer allocator.free(std.mem.span(masked_text));
+
+    const restored_text = try session.restore_with_meta(masked_text, out_meta_ptr);
+    defer allocator.free(std.mem.span(restored_text));
+    errdefer std.debug.print("masked={s}\n", .{masked_text});
+    errdefer std.debug.print("restored={s}\n", .{restored_text});
+    try std.testing.expect(std.mem.eql(u8, std.mem.span(restored_text), input));
+}
+
 test "session restore_with_meta with empty masked text frees meta and returns null" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
