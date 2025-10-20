@@ -541,14 +541,15 @@ pub const Session = struct {
     pub fn init(self: *Session, allocator: std.mem.Allocator, init_args: SessionInitArgs) !void {
         // Deprecated for internal use when storing self-pointers; prefer create().
         std.log.info("[core-lib] session init", .{});
-        // Build recognizers set (email/url/phone/bank)
-        const types = [_]EntityType{ .EMAIL_ADDRESS, .URL_ADDRESS, .PHONE_NUMBER, .BANK_NUMBER };
-        var list = try std.ArrayList(RegexRecognizer).initCapacity(allocator, types.len);
+        // Build recognizers set (email/url/phone/bank/verification_code/password)
+        const entity_type_fields = @typeInfo(EntityType).@"enum".fields;
+        var list = try std.ArrayList(RegexRecognizer).initCapacity(allocator, entity_type_fields.len);
         errdefer {
             for (list.items) |r| r.deinit();
             list.deinit(allocator);
         }
-        for (types) |t| {
+        inline for (entity_type_fields) |field| {
+            const t: EntityType = @enumFromInt(field.value);
             const empty_specs = &[_]RegexRecognizer.PatternSpec{};
             // empty specs means use default static compiled regexs in RegexRecognizer.
             const r = try RegexRecognizer.init(allocator, empty_specs, t, null);

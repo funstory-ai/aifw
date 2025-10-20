@@ -155,11 +155,15 @@ const PRIVKEY_SPECS = [_]PatternSpec{
 const VCODE_SPECS = [_]PatternSpec{
     // 4-8 digit codes
     .{ .name = "VCODE", .pattern = "\\b\\d{4,8}\\b", .score = 0.50 },
+    // Labeled alphanumeric verification codes like: "verification code: 9F4T2A"
+    .{ .name = "VCODE_LABELED_ALNUM", .pattern = "(?i)(?:verification\\s*code|verify\\s*code|otp|2fa\\s*code|auth(?:entication)?\\s*code)\\s*[:=\\-]?\\s*[A-Za-z0-9]{4,12}", .score = 0.80 },
 };
 
 const PASSWORD_SPECS = [_]PatternSpec{
     // password: <non-space>, case-insensitive not used; match common literals
     .{ .name = "PASSWORD_LITERAL", .pattern = "(?i)password\\s*[:=]\\s*\\S+", .score = 0.40 },
+    // pwd: <non-space> or common aliases
+    .{ .name = "PWD_LITERAL", .pattern = "(?i)(?:pwd|pass|passwd|passcode)\\s*[:=]\\s*\\S+", .score = 0.60 },
 };
 
 const SEED_SPECS = [_]PatternSpec{
@@ -184,6 +188,8 @@ const KVS_PATTERN_SLOT = [_]KV_PATTERN_SLOT{
     .{ VCODE_SPECS[0].pattern, 6 },
     .{ PASSWORD_SPECS[0].pattern, 7 },
     .{ SEED_SPECS[0].pattern, 8 },
+    .{ VCODE_SPECS[1].pattern, 9 },
+    .{ PASSWORD_SPECS[1].pattern, 10 },
 };
 const STATIC_MAP = StaticStringMap.initComptime(&KVS_PATTERN_SLOT);
 
@@ -265,18 +271,34 @@ fn appendStaticCompiledForEntity(
                 .score = PRIVKEY_SPECS[1].score,
             });
         },
-        .VERIFICATION_CODE => try list.append(allocator, .{
-            .name = VCODE_SPECS[0].name,
-            .pattern_text = VCODE_SPECS[0].pattern,
-            .re = g_static_slots[6].?,
-            .score = VCODE_SPECS[0].score,
-        }),
-        .PASSWORD => try list.append(allocator, .{
-            .name = PASSWORD_SPECS[0].name,
-            .pattern_text = PASSWORD_SPECS[0].pattern,
-            .re = g_static_slots[7].?,
-            .score = PASSWORD_SPECS[0].score,
-        }),
+        .VERIFICATION_CODE => {
+            try list.append(allocator, .{
+                .name = VCODE_SPECS[0].name,
+                .pattern_text = VCODE_SPECS[0].pattern,
+                .re = g_static_slots[6].?,
+                .score = VCODE_SPECS[0].score,
+            });
+            try list.append(allocator, .{
+                .name = VCODE_SPECS[1].name,
+                .pattern_text = VCODE_SPECS[1].pattern,
+                .re = g_static_slots[9].?,
+                .score = VCODE_SPECS[1].score,
+            });
+        },
+        .PASSWORD => {
+            try list.append(allocator, .{
+                .name = PASSWORD_SPECS[0].name,
+                .pattern_text = PASSWORD_SPECS[0].pattern,
+                .re = g_static_slots[7].?,
+                .score = PASSWORD_SPECS[0].score,
+            });
+            try list.append(allocator, .{
+                .name = PASSWORD_SPECS[1].name,
+                .pattern_text = PASSWORD_SPECS[1].pattern,
+                .re = g_static_slots[10].?,
+                .score = PASSWORD_SPECS[1].score,
+            });
+        },
         .RANDOM_SEED => try list.append(allocator, .{
             .name = SEED_SPECS[0].name,
             .pattern_text = SEED_SPECS[0].pattern,
