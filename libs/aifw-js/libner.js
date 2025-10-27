@@ -1,4 +1,5 @@
-import { env, AutoTokenizer, AutoModelForTokenClassification } from '@xenova/transformers';
+import { env, AutoModelForTokenClassification } from '@xenova/transformers';
+import * as Transformers from '@xenova/transformers';
 
 let MODELS_BASE = '';
 
@@ -21,9 +22,15 @@ export const SUPPORTED = new Set([
   'dslim/distilbert-NER',
   'funstory-ai/neurobert-mini',
   'boltuix/NeuroBERT-Mini',
+  "hfl/minirbt-h256",
   'dmis-lab/TinyPubMedBERT-v1.0',
-  'mrm8488/TinyBERT-spanish-uncased-finetuned-ner',
   'boltuix/NeuroBERT-Small',
+  'ckiplab/bert-tiny-chinese-ner',
+]);
+
+// Models that explicitly require/benefit from BertTokenizerFast
+const PREFER_BERT_FAST = new Set([
+  'ckiplab/bert-tiny-chinese-ner',
 ]);
 
 function localDirFor(modelId) {
@@ -96,7 +103,11 @@ export async function buildNerPipeline(modelId, { quantized = true, preferWebGPU
   if (!SUPPORTED.has(modelId)) throw new Error(`Unsupported model: ${modelId}`);
   const base = localDirFor(modelId);
   const modelPath = `${base}`;
-  const tokenizer = await AutoTokenizer.from_pretrained(modelPath);
+  // Prefer BertTokenizerFast when requested and available, fallback to AutoTokenizer
+  const TokenizerClass = PREFER_BERT_FAST.has(modelId)
+    ? (Transformers.BertTokenizerFast || Transformers.AutoTokenizer)
+    : Transformers.AutoTokenizer;
+  const tokenizer = await TokenizerClass.from_pretrained(modelPath);
   const device = [];
   if (preferWebGPU && typeof navigator !== 'undefined' && 'gpu' in navigator) device.push('webgpu');
   device.push('wasm');

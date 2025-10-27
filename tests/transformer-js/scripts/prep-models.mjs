@@ -156,6 +156,42 @@ const SUPPORTED = [
     task: 'sequence-classification',
   },
   {
+    id: 'hfl/minirbt-h256',
+    core: [
+      'config.json',
+      'onnx/model_quantized.onnx',
+    ],
+    tokenizerAlt: [
+      'tokenizer.json',
+      'vocab.txt',
+    ],
+    extra: [
+      'tokenizer_config.json',
+    ],
+    remoteBase: 'https://huggingface.co/hfl/minirbt-h256/resolve/main/',
+    remoteBaseOnnx: null,
+    exportFrom: 'hfl/minirbt-h256',
+    task: 'token-classification',
+  },
+  {
+    id: 'ckiplab/bert-tiny-chinese-ner',
+    core: [
+      'config.json',
+      'onnx/model_quantized.onnx',
+    ],
+    tokenizerAlt: [
+      'tokenizer.json',
+      'vocab.txt',
+    ],
+    extra: [
+      'tokenizer_config.json',
+    ],
+    remoteBase: 'https://huggingface.co/ckiplab/bert-tiny-chinese-ner/resolve/main/',
+    remoteBaseOnnx: null,
+    exportFrom: 'ckiplab/bert-tiny-chinese-ner',
+    task: 'token-classification',
+  },
+  {
     id: 'dmis-lab/TinyPubMedBERT-v1.0',
     core: [
       'config.json',
@@ -171,24 +207,6 @@ const SUPPORTED = [
     remoteBase: 'https://huggingface.co/dmis-lab/TinyPubMedBERT-v1.0/resolve/main/',
     remoteBaseOnnx: null,
     exportFrom: 'dmis-lab/TinyPubMedBERT-v1.0',
-    task: 'token-classification',
-  },
-  {
-    id: 'mrm8488/TinyBERT-spanish-uncased-finetuned-ner',
-    core: [
-      'config.json',
-      'onnx/model_quantized.onnx',
-    ],
-    tokenizerAlt: [
-      'tokenizer.json',
-      'vocab.txt',
-    ],
-    extra: [
-      'tokenizer_config.json',
-    ],
-    remoteBase: 'https://huggingface.co/mrm8488/TinyBERT-spanish-uncased-finetuned-ner/resolve/main/',
-    remoteBaseOnnx: null,
-    exportFrom: 'mrm8488/TinyBERT-spanish-uncased-finetuned-ner',
     task: 'token-classification',
   },
   {
@@ -258,6 +276,49 @@ function buildRemoteUrl(relPath, remoteBase) {
     base = base.replace('https://huggingface.co/', endpoint)
   }
   return new URL(relPath, base).toString()
+}
+
+// Lightweight URL existence check with redirect handling and proxy/token support
+function urlExists(url, depth = 0) {
+  const MAX_REDIRECTS = 10
+  return new Promise((resolve) => {
+    const doRequest = (currentUrl, n) => {
+      const headers = { 'User-Agent': 'oneaifw-prep/1.0', 'Accept': '*/*' }
+      if (HF_TOKEN) headers['Authorization'] = `Bearer ${HF_TOKEN}`
+      const options = { agent: HTTPS_AGENT, headers, method: 'HEAD' }
+      const req = https.request(currentUrl, options, (res) => {
+        const status = res.statusCode || 0
+        if ([301, 302, 303, 307, 308].includes(status) && res.headers && res.headers.location) {
+          if (n >= MAX_REDIRECTS) return resolve(false)
+          const nextUrl = new URL(res.headers.location, currentUrl).toString()
+          return doRequest(nextUrl, n + 1)
+        }
+        if (status === 200) return resolve(true)
+        // Some endpoints may not support HEAD properly; fallback to GET without reading body
+        const getOpts = { agent: HTTPS_AGENT, headers, method: 'GET' }
+        const getReq = https.request(currentUrl, getOpts, (getRes) => {
+          const s = getRes.statusCode || 0
+          if ([301, 302, 303, 307, 308].includes(s) && getRes.headers && getRes.headers.location) {
+            if (n >= MAX_REDIRECTS) return resolve(false)
+            const nextUrl2 = new URL(getRes.headers.location, currentUrl).toString()
+            return doRequest(nextUrl2, n + 1)
+          }
+          return resolve(s === 200)
+        })
+        getReq.on('error', () => resolve(false))
+        getReq.end()
+      })
+      req.on('error', () => resolve(false))
+      req.end()
+    }
+    doRequest(url, depth)
+  })
+}
+
+async function checkRemoteConfigAccessible(repoId) {
+  const base = `https://huggingface.co/${repoId}/resolve/main/`
+  const url = buildRemoteUrl('config.json', base)
+  return await urlExists(url)
 }
 
 async function ensureFile(baseDir, relPath, remoteBase) {
@@ -377,6 +438,14 @@ async function ensureQuantizedIfMissing(model) {
   } catch (_) {}
   console.log(`[prep-models] quantized model missing, attempting conversion: ${modelId}`)
   // Pass task to exporter via env
+  // Pre-flight: skip conversion if source repo is not accessible (avoid noisy failures on 404)
+  try {
+    const accessible = await checkRemoteConfigAccessible(exportFrom)
+    if (!accessible) {
+      console.warn(`[prep-models] source repo not accessible for conversion: ${exportFrom} (missing config.json). Skipping conversion.`)
+      return false
+    }
+  } catch (_) {}
   const prevTask = process.env.EXPORT_TASK
   if (model.task) process.env.EXPORT_TASK = model.task
   const ok = await runPythonQuantizer(exportFrom, modelId)
