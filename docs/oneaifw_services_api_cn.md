@@ -1,4 +1,4 @@
-## OneAIFW 后台服务 API 文档
+# OneAIFW 后台服务 API 文档
 
 本文档描述了 OneAIFW 本地后台服务的 HTTP API 及二进制协议。
 
@@ -49,6 +49,7 @@ curl -s -X POST http://127.0.0.1:8844/api/call \
 1) 4 字节无符号整型 N：后续“文本”的 UTF-8 字节长度
 2) N 字节：UTF-8 文本字节（在 mask_text 中为 masked text；在 restore_text 请求中为 masked text）
 3) 剩余全部字节：`maskMeta` 原始 bytes（在 mask_text 响应中返回；在 restore_text 请求中携带）
+
 **备注**：`maskMeta` 是OneAIFW服务内部使用的不透明的一段二进制数据，表现为bytes，由匿名化接口返回，调用者无需关心其具体内容。
 
 ### 匿名化接口（生成 masked text 与 maskMeta）

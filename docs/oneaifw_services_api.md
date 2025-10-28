@@ -1,4 +1,4 @@
-## OneAIFW Backend Service API
+# OneAIFW Backend Service API
 
 This document describes the HTTP API and binary protocol of the local OneAIFW backend service.
 
