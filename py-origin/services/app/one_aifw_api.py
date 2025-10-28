@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any, List
+import json
 
 from .analyzer import AnalyzerWrapper, EntitySpan
 from .anonymizer import AnonymizerWrapper
@@ -35,6 +36,25 @@ class OneAIFWAPI:
         return self._anonymizer_wrapper.restore(text=text, placeholders_map=placeholders_map)
 
     # Public API
+    def mask_text(self, text: str, language: Optional[str] = None) -> Dict[str, Any]:
+        """Mask PII in text and return masked text plus metadata for restoration.
+
+        Mirrors the behavior expected by frontends using mask/restore flows.
+        """
+        lang = language or self._analyzer_wrapper.detect_language(text)
+        anon = self._anonymizer_wrapper.anonymize(text=text, operators=None, language=lang)
+        # Serialize placeholdersMap (dict) into UTF-8 JSON bytes, then expose as bytes array (list[int])
+        serialized = json.dumps(anon["placeholdersMap"], ensure_ascii=False).encode("utf-8")
+        return {"text": anon["text"], "maskMeta": serialized}
+
+    def restore_text(self, text: str, mask_meta: bytes) -> str:
+        """Restore masked placeholders to their original values using mask metadata.
+
+        Accepts mask_meta as bytes; decodes JSON → dict.
+        """
+        placeholders_map = json.loads(mask_meta.decode("utf-8"))
+        return self._anonymizer_wrapper.restore(text=text, placeholders_map=placeholders_map)
+
     def call(
         self,
         text: str,
@@ -82,5 +102,13 @@ def call(
         model=model,
         temperature=temperature,
     )
+
+
+def mask_text(text: str, language: Optional[str] = None) -> Dict[str, Any]:
+    return api.mask_text(text=text, language=language)
+
+
+def restore_text(text: str, mask_meta: Any) -> str:
+    return api.restore_text(text=text, mask_meta=mask_meta)
 
 

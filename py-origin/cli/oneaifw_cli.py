@@ -484,6 +484,67 @@ def cmd_http_call(args: argparse.Namespace) -> int:
         return 3
 
 
+def cmd_mask_restore(args: argparse.Namespace) -> int:
+    # Load config
+    cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
+    text = read_stdin_if_dash(args.text)
+    language = getattr(args, 'language', None)
+    # Resolve port
+    port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), 8844) or 8844)
+
+    # 1) mask_text → binary response: [u32_le text_len][text bytes][maskMeta bytes]
+    url_mask = f"http://localhost:{port}/api/mask_text"
+    payload_mask = {"text": text, "language": language}
+    data_mask = json.dumps(payload_mask, ensure_ascii=False).encode('utf-8')
+    req_mask = urllib.request.Request(url_mask, data=data_mask, headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req_mask) as resp:
+            blob = resp.read()
+            if len(blob) < 4:
+                print("invalid mask_text response", file=sys.stderr)
+                return 2
+            text_len = int.from_bytes(blob[0:4], byteorder='little', signed=False)
+            if len(blob) < 4 + text_len:
+                print("truncated mask_text response", file=sys.stderr)
+                return 2
+            text_bytes = blob[4:4+text_len]
+            mask_meta_bytes = blob[4+text_len:]
+            masked_text = text_bytes.decode('utf-8')
+            print(masked_text)
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode('utf-8', errors='ignore')
+        except Exception:
+            err_body = ''
+        print(f"HTTP {getattr(e, 'code', '')} for {getattr(e, 'url', url_mask)}: {err_body}", file=sys.stderr)
+        return 2
+    except Exception as e:
+        print(f"mask_text failed: {e}", file=sys.stderr)
+        return 3
+
+    # 2) restore_text → binary request: [u32_le text_len][text bytes][maskMeta bytes], plain text response
+    url_restore = f"http://localhost:{port}/api/restore_text"
+    text_bytes = masked_text.encode('utf-8')
+    header = len(text_bytes).to_bytes(4, byteorder='little', signed=False)
+    payload = header + text_bytes + mask_meta_bytes
+    req_restore = urllib.request.Request(url_restore, data=payload, headers={'Content-Type': 'application/octet-stream'})
+    try:
+        with urllib.request.urlopen(req_restore) as resp:
+            restored_text = resp.read().decode('utf-8', errors='replace')
+            print(restored_text)
+        return 0
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode('utf-8', errors='ignore')
+        except Exception:
+            err_body = ''
+        print(f"HTTP {getattr(e, 'code', '')} for {getattr(e, 'url', url_restore)}: {err_body}", file=sys.stderr)
+        return 2
+    except Exception as e:
+        print(f"restore_text failed: {e}", file=sys.stderr)
+        return 3
+
+
 # stop: stop backend
 def cmd_stop(args: argparse.Namespace) -> int:
     port = args.port
@@ -599,6 +660,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_http.add_argument("--api-key-file", help="Key file path passed to backend (optional)")
     p_http.add_argument("--temperature", type=float)
     p_http.set_defaults(func=cmd_http_call)
+
+    # mask_restore: test mask_text and restore_text HTTP APIs
+    p_mr = sub.add_parser("mask_restore", help="Call HTTP API: /api/mask_text then /api/restore_text")
+    p_mr.add_argument("text", help="Text to send or '-' to read from stdin")
+    p_mr.add_argument("--language", help="Optional language hint (e.g., en, zh)")
+    p_mr.add_argument("--config", help="Path to aifw config file (json/yaml)")
+    p_mr.add_argument("--port", type=int, default=8844)
+    p_mr.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")
+    p_mr.set_defaults(func=cmd_mask_restore)
 
     return parser
 
