@@ -492,24 +492,17 @@ def cmd_mask_restore(args: argparse.Namespace) -> int:
     # Resolve port
     port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), 8844) or 8844)
 
-    # 1) mask_text → binary response: [u32_le text_len][text bytes][maskMeta bytes]
+    # 1) mask_text → JSON response { text, maskMeta (base64 of JSON bytes) }
     url_mask = f"http://localhost:{port}/api/mask_text"
     payload_mask = {"text": text, "language": language}
     data_mask = json.dumps(payload_mask, ensure_ascii=False).encode('utf-8')
     req_mask = urllib.request.Request(url_mask, data=data_mask, headers={'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(req_mask) as resp:
-            blob = resp.read()
-            if len(blob) < 4:
-                print("invalid mask_text response", file=sys.stderr)
-                return 2
-            text_len = int.from_bytes(blob[0:4], byteorder='little', signed=False)
-            if len(blob) < 4 + text_len:
-                print("truncated mask_text response", file=sys.stderr)
-                return 2
-            text_bytes = blob[4:4+text_len]
-            mask_meta_bytes = blob[4+text_len:]
-            masked_text = text_bytes.decode('utf-8')
+            body = resp.read().decode('utf-8', errors='replace')
+            j = json.loads(body)
+            masked_text = j.get('text', '')
+            mask_meta = j.get('maskMeta', '')  # base64 string
             print(masked_text)
     except urllib.error.HTTPError as e:
         try:
@@ -522,15 +515,16 @@ def cmd_mask_restore(args: argparse.Namespace) -> int:
         print(f"mask_text failed: {e}", file=sys.stderr)
         return 3
 
-    # 2) restore_text → binary request: [u32_le text_len][text bytes][maskMeta bytes], plain text response
+    # 2) restore_text → JSON request { text, maskMeta (base64) }, JSON response { text }
     url_restore = f"http://localhost:{port}/api/restore_text"
-    text_bytes = masked_text.encode('utf-8')
-    header = len(text_bytes).to_bytes(4, byteorder='little', signed=False)
-    payload = header + text_bytes + mask_meta_bytes
-    req_restore = urllib.request.Request(url_restore, data=payload, headers={'Content-Type': 'application/octet-stream'})
+    payload_restore = {"text": masked_text, "maskMeta": mask_meta}
+    data_restore = json.dumps(payload_restore, ensure_ascii=False).encode('utf-8')
+    req_restore = urllib.request.Request(url_restore, data=data_restore, headers={'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(req_restore) as resp:
-            restored_text = resp.read().decode('utf-8', errors='replace')
+            body = resp.read().decode('utf-8', errors='replace')
+            j = json.loads(body)
+            restored_text = j.get('text', body)
             print(restored_text)
         return 0
     except urllib.error.HTTPError as e:
@@ -543,6 +537,96 @@ def cmd_mask_restore(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"restore_text failed: {e}", file=sys.stderr)
         return 3
+
+
+def cmd_mask_restore_batch(args: argparse.Namespace) -> int:
+    cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
+    language = getattr(args, 'language', None)
+    raw_texts = list(getattr(args, 'texts', []) or [])
+    texts: list[str] = [read_stdin_if_dash(t) for t in raw_texts]
+    if not texts:
+        print("no input texts", file=sys.stderr)
+        return 2
+    port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), 8844) or 8844)
+
+    # mask_text_batch
+    url_mask = f"http://localhost:{port}/api/mask_text_batch"
+    payload = [{"text": t, "language": language} for t in texts]
+    data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    req = urllib.request.Request(url_mask, data=data, headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            body = resp.read().decode('utf-8', errors='replace')
+            j = json.loads(body)
+            arr = list(j.get('resp_array') or [])
+            if len(arr) != len(texts):
+                print("mask_text_batch: response length mismatch", file=sys.stderr)
+                return 2
+            masked = [it.get('text', '') for it in arr]
+            metas = [it.get('maskMeta', '') for it in arr]
+            for m in masked:
+                print(m)
+    except Exception as e:
+        print(f"mask_text_batch failed: {e}", file=sys.stderr)
+        return 3
+
+    # restore_text_batch
+    url_restore = f"http://localhost:{port}/api/restore_text_batch"
+    restore_payload = [{"text": m, "maskMeta": mm} for m, mm in zip(masked, metas)]
+    data2 = json.dumps(restore_payload, ensure_ascii=False).encode('utf-8')
+    req2 = urllib.request.Request(url_restore, data=data2, headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req2) as resp:
+            body = resp.read().decode('utf-8', errors='replace')
+            j = json.loads(body)
+            restored = list(j.get('restored_array') or [])
+            for r in restored:
+                print(r)
+        return 0
+    except Exception as e:
+        print(f"restore_text_batch failed: {e}", file=sys.stderr)
+        return 3
+
+
+def cmd_multi_mask_one_restore(args: argparse.Namespace) -> int:
+    cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
+    language = getattr(args, 'language', None)
+    raw_texts = list(getattr(args, 'texts', []) or [])
+    texts: list[str] = [read_stdin_if_dash(t) for t in raw_texts]
+    if not texts:
+        print("no input texts", file=sys.stderr)
+        return 2
+    port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), 8844) or 8844)
+
+    masked: list[str] = []
+    metas: list[str] = []
+    restore_payload: list[RestoreIn] = []
+
+    # multiple mask_text
+    for t in texts:
+        url_mask = f"http://localhost:{port}/api/mask_text"
+        payload = {"text": t, "language": language}
+        data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        req = urllib.request.Request(url_mask, data=data, headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req) as resp:
+            body = resp.read().decode('utf-8', errors='replace')
+            j = json.loads(body)
+            masked_text = j.get('text', '')
+            mask_meta = j.get('maskMeta', '')
+            restore_payload.append({"text": masked_text, "maskMeta": mask_meta})
+            print(masked_text)
+
+    # single restore_text_batch
+    url_restore = f"http://localhost:{port}/api/restore_text_batch"
+    data2 = json.dumps(restore_payload, ensure_ascii=False).encode('utf-8')
+    req2 = urllib.request.Request(url_restore, data=data2, headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req2) as resp:
+        body = resp.read().decode('utf-8', errors='replace')
+        j = json.loads(body)
+        restored = list(j.get('restored_array') or [])
+        for r in restored:
+            print(r)
+    return 0
 
 
 # stop: stop backend
@@ -669,6 +753,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_mr.add_argument("--port", type=int, default=8844)
     p_mr.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")
     p_mr.set_defaults(func=cmd_mask_restore)
+
+    # mask_restore_batch
+    p_mrb = sub.add_parser("mask_restore_batch", help="Batch call /api/mask_text_batch then /api/restore_text_batch")
+    p_mrb.add_argument("texts", nargs='+', help="One or more texts; use '-' to read from stdin as a single item")
+    p_mrb.add_argument("--language", help="Optional language hint (e.g., en, zh)")
+    p_mrb.add_argument("--config", help="Path to aifw config file (json/yaml)")
+    p_mrb.add_argument("--port", type=int, default=8844)
+    p_mrb.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")
+    p_mrb.set_defaults(func=cmd_mask_restore_batch)
+
+    # multi_mask_one_restore
+    p_mmr = sub.add_parser("multi_mask_one_restore", help="Mask each text individually, then restore all via restore_text_batch")
+    p_mmr.add_argument("texts", nargs='+', help="One or more texts; use '-' to read from stdin as a single item")
+    p_mmr.add_argument("--language", help="Optional language hint (e.g., en, zh)")
+    p_mmr.add_argument("--config", help="Path to aifw config file (json/yaml)")
+    p_mmr.add_argument("--port", type=int, default=8844)
+    p_mmr.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")
+    p_mmr.set_defaults(func=cmd_multi_mask_one_restore)
 
     return parser
 

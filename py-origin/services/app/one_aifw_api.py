@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any, List
 import json
+import base64
 
 from .analyzer import AnalyzerWrapper, EntitySpan
 from .anonymizer import AnonymizerWrapper
@@ -39,20 +40,27 @@ class OneAIFWAPI:
     def mask_text(self, text: str, language: Optional[str] = None) -> Dict[str, Any]:
         """Mask PII in text and return masked text plus metadata for restoration.
 
-        Mirrors the behavior expected by frontends using mask/restore flows.
+        maskMeta is a base64 string of UTF-8 JSON bytes for placeholdersMap.
         """
         lang = language or self._analyzer_wrapper.detect_language(text)
         anon = self._anonymizer_wrapper.anonymize(text=text, operators=None, language=lang)
-        # Serialize placeholdersMap (dict) into UTF-8 JSON bytes, then expose as bytes array (list[int])
-        serialized = json.dumps(anon["placeholdersMap"], ensure_ascii=False).encode("utf-8")
-        return {"text": anon["text"], "maskMeta": serialized}
+        placeholders = anon.get("placeholdersMap", {}) or {}
+        serialized = json.dumps(placeholders, ensure_ascii=False).encode("utf-8")
+        mask_meta_b64 = base64.b64encode(serialized).decode("ascii")
+        return {"text": anon["text"], "maskMeta": mask_meta_b64}
 
-    def restore_text(self, text: str, mask_meta: bytes) -> str:
-        """Restore masked placeholders to their original values using mask metadata.
-
-        Accepts mask_meta as bytes; decodes JSON → dict.
-        """
-        placeholders_map = json.loads(mask_meta.decode("utf-8"))
+    def restore_text(self, text: str, mask_meta: Any) -> str:
+        """Restore masked placeholders using base64-encoded JSON metadata."""
+        try:
+            if isinstance(mask_meta, (bytes, bytearray)):
+                decoded = bytes(mask_meta)
+            else:
+                decoded = base64.b64decode(str(mask_meta), validate=False)
+            placeholders_map = json.loads(decoded.decode("utf-8"))
+            if not isinstance(placeholders_map, dict):
+                placeholders_map = {}
+        except Exception:
+            placeholders_map = {}
         return self._anonymizer_wrapper.restore(text=text, placeholders_map=placeholders_map)
 
     def call(

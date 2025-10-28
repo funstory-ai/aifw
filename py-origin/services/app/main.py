@@ -1,12 +1,10 @@
-from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import Response, PlainTextResponse
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List, Union
 from .one_aifw_api import OneAIFWAPI
 from .aifw_utils import cleanup_monthly_logs
 import os
 import logging
-import struct
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +28,8 @@ class MaskIn(BaseModel):
 
 class RestoreIn(BaseModel):
 	text: str
-	# Accept bytes array (list[int]) per requirement
-	maskMeta: bytes
+	# maskMeta: base64 string of JSON(bytes) for placeholdersMap
+	maskMeta: str
 
 
 def check_api_key(x_api_key: Optional[str] = Header(None)):
@@ -72,28 +70,29 @@ async def api_call(inp: CallIn, x_api_key: Optional[str] = Header(None)):
 async def api_mask_text(inp: MaskIn, x_api_key: Optional[str] = Header(None)):
     check_api_key(x_api_key)
     res = api.mask_text(text=inp.text, language=inp.language)
-    # Binary response: [u32_le text_len][text bytes][maskMeta bytes]
-    masked_text = res["text"]
-    meta_bytes = res["maskMeta"]
-    if not isinstance(meta_bytes, (bytes, bytearray)):
-        meta_bytes = bytes(meta_bytes)
-    text_bytes = (masked_text or "").encode("utf-8")
-    header = struct.pack('<I', len(text_bytes))
-    payload = header + text_bytes + bytes(meta_bytes)
-    return Response(content=payload, media_type='application/octet-stream')
+    # JSON response: { text: string, maskMeta: { placeholdersMap: {token: base64}, encoding, charset } }
+    return {"text": res["text"], "maskMeta": res["maskMeta"]}
 
 
 @app.post("/api/restore_text")
-async def api_restore_text(req: Request, x_api_key: Optional[str] = Header(None)):
+async def api_restore_text(inp: RestoreIn, x_api_key: Optional[str] = Header(None)):
     check_api_key(x_api_key)
-    body = await req.body()
-    if len(body) < 4:
-        raise HTTPException(status_code=400, detail="invalid payload")
-    (text_len,) = struct.unpack('<I', body[:4])
-    if len(body) < 4 + text_len:
-        raise HTTPException(status_code=400, detail="truncated payload")
-    text_bytes = body[4:4+text_len]
-    meta_bytes = body[4+text_len:]
-    masked_text = text_bytes.decode('utf-8')
-    restored = api.restore_text(text=masked_text, mask_meta=meta_bytes)
-    return PlainTextResponse(content=restored, media_type='text/plain; charset=utf-8')
+    restored = api.restore_text(text=inp.text, mask_meta=inp.maskMeta)
+    return {"text": restored}
+
+@app.post("/api/mask_text_batch")
+async def api_mask_text_batch(inp_array: List[MaskIn], x_api_key: Optional[str] = Header(None)):
+    check_api_key(x_api_key)
+    res_array = []
+    for inp in inp_array:
+        res_array.append(api.mask_text(text=inp.text, language=inp.language))
+    return {"resp_array": res_array}
+
+@app.post("/api/restore_text_batch")
+async def api_restore_text_batch(inp_array: List[RestoreIn], x_api_key: Optional[str] = Header(None)):
+    check_api_key(x_api_key)
+    restored_array = []
+    for inp in inp_array:
+        restored = api.restore_text(text=inp.text, mask_meta=inp.maskMeta)
+        restored_array.append(restored)
+    return {"restored_array": restored_array}
