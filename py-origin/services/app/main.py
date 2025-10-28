@@ -80,6 +80,7 @@ async def api_restore_text(inp: RestoreIn, x_api_key: Optional[str] = Header(Non
     restored = api.restore_text(text=inp.text, mask_meta=inp.maskMeta)
     return {"text": restored}
 
+
 @app.post("/api/mask_text_batch")
 async def api_mask_text_batch(inp_array: List[MaskIn], x_api_key: Optional[str] = Header(None)):
     check_api_key(x_api_key)
@@ -87,6 +88,7 @@ async def api_mask_text_batch(inp_array: List[MaskIn], x_api_key: Optional[str] 
     for inp in inp_array:
         res_array.append(api.mask_text(text=inp.text, language=inp.language))
     return {"resp_array": res_array}
+
 
 @app.post("/api/restore_text_batch")
 async def api_restore_text_batch(inp_array: List[RestoreIn], x_api_key: Optional[str] = Header(None)):

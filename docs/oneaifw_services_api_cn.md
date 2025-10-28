@@ -1,6 +1,6 @@
 # OneAIFW 后台服务 API 文档
 
-本文档描述了 OneAIFW 本地后台服务的 HTTP API 及二进制协议。
+本文档描述了 OneAIFW 本地后台服务的 HTTP API。
 
 默认服务地址：`http://127.0.0.1:8844`
 
@@ -10,12 +10,21 @@
 - 字符编码：UTF-8
 - 错误返回：
   - 401 Unauthorized：缺少或错误的 `X-API-Key`
-  - 400 Bad Request：非法/截断的二进制载荷
+  - 400 Bad Request：非法请求内容
 
 ## 健康检查
 - 方法/路径：GET `/api/health`
 - 请求体：无
 - 响应（JSON）：
+```json
+{ "status": "ok" }
+```
+
+示例（curl）：
+```bash
+curl -s -X GET http://127.0.0.1:8844/api/health
+```
+响应:
 ```json
 { "status": "ok" }
 ```
@@ -37,20 +46,20 @@
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/call \
   -H 'Content-Type: application/json' \
-  -d '{"text":"My email is test@example.com","temperature":0.0}'
+  -d '{"text":"请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."}'
+```
+响应:
+```json
+{"text":"我的电子邮件地址是 test@example.com，我的电话号码是 18744325579。"}
 ```
 
 ## 匿名化与反匿名化
 
-这两个接口一起用于匿名化一段文本，处理匿名化的文本（比如翻译），反匿名化处理后的文本。需要配合使用，且每一个匿名化接口的调用需要有一个对应的反匿名化接口的调用，要不然会有内存泄漏。可以先批量调用匿名化接口，处理完所有匿名化的文本后，再批量调用反匿名化接口。
-匿名化接口返回的二进制帧数据格式和反匿名化接口接收的二进制帧数据格式是一样的，下面有其具体定义。需要注意的是，配对的匿名化和反匿名化接口调用需要使用相同的maskMeta。
+这两个接口一起用于匿名化一段文本，处理匿名化的文本（比如翻译），再反匿名化处理后的文本。必须配对使用：每次匿名化都需要对应一次反匿名化，否则可能造成内存泄漏。可以先批量匿名化、处理完成后再批量反匿名化。
 
-### 二进制帧数据格式（均为小端序 little-endian）：
-1) 4 字节无符号整型 N：后续“文本”的 UTF-8 字节长度
-2) N 字节：UTF-8 文本字节（在 mask_text 中为 masked text；在 restore_text 请求中为 masked text）
-3) 剩余全部字节：`maskMeta` 原始 bytes（在 mask_text 响应中返回；在 restore_text 请求中携带）
+重要：配对的匿名化和反匿名化接口调用需要使用相同的 `maskMeta`。
 
-**备注**：`maskMeta` 是OneAIFW服务内部使用的不透明的一段二进制数据，表现为bytes，由匿名化接口返回，调用者无需关心其具体内容。
+`maskMeta` 是将 `placeholdersMap`（UTF-8 编码的 JSON 字节）整体 base64 编码得到的字符串；调用方将其视为不透明字符串，按原样传回 `/api/restore_text` 即可。
 
 ### 匿名化接口（生成 masked text 与 maskMeta）
 - 方法/路径：POST `/api/mask_text`
@@ -58,15 +67,57 @@ curl -s -X POST http://127.0.0.1:8844/api/call \
 - 请求体字段：
   - `text` (string, 必填)：原始输入文本
   - `language` (string, 可选)：语言提示（如 `en`、`zh`）；若省略，服务端自动检测
-- 响应 Content-Type：`application/octet-stream`
-- 响应体：二进制帧，携带 masked text 与 `maskMeta` 原始 bytes
+- 响应 Content-Type：`application/json`
+- 响应体：
+```json
+{
+  "text": "<masked_text>",
+  "maskMeta": "<base64(placeholdersMap_json_bytes)>"
+}
+```
+
+示例（curl）：
+```bash
+curl -s -X POST http://127.0.0.1:8844/api/mask_text \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"My email address is test@example.com, and my phone number is 18744325579.","language":"en"}'
+```
+响应:
+```json
+{
+  "text":"My email address is __PII_EMAIL_ADDRESS_00000001__, and my phone number is __PII_PHONE_NUMBER_00000002__.",
+  "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDJfXyI6ICIxODc0NDMyNTU3OSIsICJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"
+}
+```
 
 ### 反匿名化接口（输入 masked text 与 maskMeta 得到反匿名化后的文本）
 - 方法/路径：POST `/api/restore_text`
-- 请求 Content-Type：`application/octet-stream`
-- 请求体：二进制帧（见上），包含 masked text 与对应的 `maskMeta` 原始 bytes
-- 响应 Content-Type：`text/plain; charset=utf-8`
-- 响应体：反匿名化后的纯文本字符串
+- 请求 Content-Type：`application/json`
+- 请求体：
+```json
+{
+  "text": "<上一阶段返回的 masked_text>",
+  "maskMeta": "<上一阶段返回的 base64(maskMeta)>"
+}
+```
+- 响应 Content-Type：`application/json`
+- 响应体：
+```json
+{
+  "text": "<restored_text>"
+}
+```
+
+示例（curl）：
+```bash
+curl -s -X POST http://127.0.0.1:8844/api/restore_text \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"My email address is __PII_EMAIL_ADDRESS_00000001__, and my phone number is __PII_PHONE_NUMBER_00000002__.", "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDJfXyI6ICIxODc0NDMyNTU3OSIsICJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"}'
+```
+响应:
+```json
+{"text":"My email address is test@example.com, and my phone number is 18744325579."}
+```
 
 ### Python 使用示例
 ```python
@@ -74,24 +125,18 @@ import requests
 
 base = "http://127.0.0.1:8844"
 
-# 1) 调用 mask_text（JSON 请求 → 二进制响应）
+# 1) 调用例子 mask_text（JSON → JSON）
 r = requests.post(f"{base}/api/mask_text", json={"text": "张三电话13812345678", "language": "zh"})
 r.raise_for_status()
-blob = r.content
-
-if len(blob) < 4:
-    raise RuntimeError("invalid response")
-text_len = int.from_bytes(blob[0:4], byteorder="little", signed=False)
-masked_text = blob[4:4+text_len].decode("utf-8")
-mask_meta_bytes = blob[4+text_len:]
+obj = r.json()
+masked_text = obj["text"]
+mask_meta_b64 = obj["maskMeta"]
 print("masked:", masked_text)
 
-# 2) 调用 restore_text（二进制请求 → 文本响应）
-text_bytes = masked_text.encode("utf-8")
-payload = len(text_bytes).to_bytes(4, "little") + text_bytes + mask_meta_bytes
-r2 = requests.post(f"{base}/api/restore_text", data=payload, headers={"Content-Type": "application/octet-stream"})
+# 2) 调用例子 restore_text（JSON → JSON）
+r2 = requests.post(f"{base}/api/restore_text", json={"text": masked_text, "maskMeta": mask_meta_b64})
 r2.raise_for_status()
-print("restored:", r2.text)
+print("restored:", r2.json()["text"])
 ```
 
 ### Node.js（fetch）示例
@@ -99,40 +144,89 @@ print("restored:", r2.text)
 // 需要 Node 18+ 或自行引入 fetch polyfill
 const base = 'http://127.0.0.1:8844';
 
-// 1) mask_text
+// 1) 调用例子 mask_text（JSON → JSON）
 const jr = await fetch(`${base}/api/mask_text`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ text: 'My email is test@example.com' })
 });
 if (!jr.ok) throw new Error(`mask_text http ${jr.status}`);
-const buf = new Uint8Array(await jr.arrayBuffer());
-const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-const textLen = view.getUint32(0, true);
-const textBytes = buf.subarray(4, 4 + textLen);
-const maskMetaBytes = buf.subarray(4 + textLen);
-const maskedText = new TextDecoder().decode(textBytes);
+const obj = await jr.json();
+const maskedText = obj.text;
+const maskMetaB64 = obj.maskMeta;
 console.log('masked:', maskedText);
 
-// 2) restore_text
-const mtBytes = new TextEncoder().encode(maskedText);
-const header = new Uint8Array(4);
-new DataView(header.buffer).setUint32(0, mtBytes.length, true);
-const payload = new Uint8Array(4 + mtBytes.length + maskMetaBytes.length);
-payload.set(header, 0);
-payload.set(mtBytes, 4);
-payload.set(maskMetaBytes, 4 + mtBytes.length);
-
+// 2) 调用例子 restore_text（JSON → JSON）
 const rr = await fetch(`${base}/api/restore_text`, {
   method: 'POST',
-  headers: { 'Content-Type': 'application/octet-stream' },
-  body: payload
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ text: maskedText, maskMeta: maskMetaB64 })
 });
 if (!rr.ok) throw new Error(`restore_text http ${rr.status}`);
-const restored = await rr.text();
-console.log('restored:', restored);
+const restoredObj = await rr.json();
+console.log('restored:', restoredObj.text);
+```
+
+## 批量接口
+
+### 匿名化批量接口：mask_text_batch
+- 方法/路径：POST `/api/mask_text_batch`
+- 请求 Content-Type：`application/json`
+- 请求体：对象数组，每项 `{ text, language? }`
+- 响应 Content-Type：`application/json`
+- 响应体（待填充实际内容）：
+```json
+{
+  "resp_array": [
+    { "text": "<masked_text_1>", "maskMeta": "<base64_meta_1>" },
+    { "text": "<masked_text_2>", "maskMeta": "<base64_meta_2>" }
+  ]
+}
+```
+
+示例（curl）：
+```bash
+curl -s -X POST http://127.0.0.1:8844/api/mask_text_batch \
+  -H 'Content-Type: application/json' \
+  -d '[{"text":"My email address is test@example.com"}, {"text":"and my phone number is 18744325579.","language":"en"}]'
+```
+响应:
+```json
+{"resp_array":[
+    {"text":"My email address is __PII_EMAIL_ADDRESS_00000001__",
+     "maskMeta":"eyJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"},
+    {"text":"and my phone number is __PII_PHONE_NUMBER_00000001__.",
+     "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDFfXyI6ICIxODc0NDMyNTU3OSJ9"}
+  ]
+}
+```
+
+### 反匿名化批量接口：restore_text_batch
+- 方法/路径：POST `/api/restore_text_batch`
+- 请求 Content-Type：`application/json`
+- 请求体：对象数组，每项 `{ text, maskMeta }`（`maskMeta` 为 base64 字符串）
+- 响应 Content-Type：`application/json`
+- 响应体（待填充实际内容）：
+```json
+{
+  "restored_array": [
+    "<restored_text_1>",
+    "<restored_text_2>"
+  ]
+}
+```
+
+示例（curl）：
+```bash
+curl -s -X POST http://127.0.0.1:8844/api/restore_text_batch \
+  -H 'Content-Type: application/json' \
+  -d '[{"text":"My email address is __PII_EMAIL_ADDRESS_00000001__","maskMeta":"eyJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"},{"text":"and my phone number is __PII_PHONE_NUMBER_00000001__.","maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDFfXyI6ICIxODc0NDMyNTU3OSJ9"}]'
+```
+响应:
+```json
+{"restored_array":["My email address is test@example.com","and my phone number is 18744325579."]}
 ```
 
 ## 附注
-- `maskMeta` 的内容在服务端是 `placeholdersMap` 的 UTF-8 JSON 序列化结果；客户端无需理解其结构，按原样传回 `restore_text` 即可。
+- `maskMeta` 的内容在服务端是 `placeholdersMap` 的 UTF-8 JSON 字节整体 base64 编码；客户端无需理解其结构，按原样传回 `restore_text` 即可。
 - 若启用鉴权，请在请求头携带 `X-API-Key`。
