@@ -456,7 +456,12 @@ def cmd_http_call(args: argparse.Namespace) -> int:
             body = resp.read().decode('utf-8')
             try:
                 j = json.loads(body)
-                print(j.get('text', body))
+                err = j.get('error')
+                if err:
+                    print(f"error: {err}", file=sys.stderr)
+                    return 2
+                out = (j.get('output') or {}).get('text', '')
+                print(out)
             except Exception:
                 print(body)
         return 0
@@ -492,7 +497,7 @@ def cmd_mask_restore(args: argparse.Namespace) -> int:
     # Resolve port
     port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), 8844) or 8844)
 
-    # 1) mask_text → JSON response { text, maskMeta (base64 of JSON bytes) }
+    # 1) mask_text → JSON response { output: { text, maskMeta }, error }
     url_mask = f"http://localhost:{port}/api/mask_text"
     payload_mask = {"text": text, "language": language}
     data_mask = json.dumps(payload_mask, ensure_ascii=False).encode('utf-8')
@@ -501,8 +506,12 @@ def cmd_mask_restore(args: argparse.Namespace) -> int:
         with urllib.request.urlopen(req_mask) as resp:
             body = resp.read().decode('utf-8', errors='replace')
             j = json.loads(body)
-            masked_text = j.get('text', '')
-            mask_meta = j.get('maskMeta', '')  # base64 string
+            if j.get('error'):
+                print(f"error: {j['error']}", file=sys.stderr)
+                return 2
+            output = j.get('output') or {}
+            masked_text = output.get('text', '')
+            mask_meta = output.get('maskMeta', '')
             print(masked_text)
     except urllib.error.HTTPError as e:
         try:
@@ -515,7 +524,7 @@ def cmd_mask_restore(args: argparse.Namespace) -> int:
         print(f"mask_text failed: {e}", file=sys.stderr)
         return 3
 
-    # 2) restore_text → JSON request { text, maskMeta (base64) }, JSON response { text }
+    # 2) restore_text → JSON request { text, maskMeta }, JSON response { output: { text }, error }
     url_restore = f"http://localhost:{port}/api/restore_text"
     payload_restore = {"text": masked_text, "maskMeta": mask_meta}
     data_restore = json.dumps(payload_restore, ensure_ascii=False).encode('utf-8')
@@ -524,7 +533,10 @@ def cmd_mask_restore(args: argparse.Namespace) -> int:
         with urllib.request.urlopen(req_restore) as resp:
             body = resp.read().decode('utf-8', errors='replace')
             j = json.loads(body)
-            restored_text = j.get('text', body)
+            if j.get('error'):
+                print(f"error: {j['error']}", file=sys.stderr)
+                return 2
+            restored_text = (j.get('output') or {}).get('text', body)
             print(restored_text)
         return 0
     except urllib.error.HTTPError as e:
@@ -558,7 +570,10 @@ def cmd_mask_restore_batch(args: argparse.Namespace) -> int:
         with urllib.request.urlopen(req) as resp:
             body = resp.read().decode('utf-8', errors='replace')
             j = json.loads(body)
-            arr = list(j.get('resp_array') or [])
+            if j.get('error'):
+                print(f"error: {j['error']}", file=sys.stderr)
+                return 2
+            arr = list((j.get('output') or []))
             if len(arr) != len(texts):
                 print("mask_text_batch: response length mismatch", file=sys.stderr)
                 return 2
@@ -579,9 +594,12 @@ def cmd_mask_restore_batch(args: argparse.Namespace) -> int:
         with urllib.request.urlopen(req2) as resp:
             body = resp.read().decode('utf-8', errors='replace')
             j = json.loads(body)
-            restored = list(j.get('restored_array') or [])
+            if j.get('error'):
+                print(f"error: {j['error']}", file=sys.stderr)
+                return 2
+            restored = list((j.get('output') or []))
             for r in restored:
-                print(r)
+                print((r or {}).get('text', ''))
         return 0
     except Exception as e:
         print(f"restore_text_batch failed: {e}", file=sys.stderr)
@@ -611,8 +629,12 @@ def cmd_multi_mask_one_restore(args: argparse.Namespace) -> int:
         with urllib.request.urlopen(req) as resp:
             body = resp.read().decode('utf-8', errors='replace')
             j = json.loads(body)
-            masked_text = j.get('text', '')
-            mask_meta = j.get('maskMeta', '')
+            if j.get('error'):
+                print(f"error: {j['error']}", file=sys.stderr)
+                return 2
+            output = j.get('output') or {}
+            masked_text = output.get('text', '')
+            mask_meta = output.get('maskMeta', '')
             restore_payload.append({"text": masked_text, "maskMeta": mask_meta})
             print(masked_text)
 
@@ -623,9 +645,12 @@ def cmd_multi_mask_one_restore(args: argparse.Namespace) -> int:
     with urllib.request.urlopen(req2) as resp:
         body = resp.read().decode('utf-8', errors='replace')
         j = json.loads(body)
-        restored = list(j.get('restored_array') or [])
+        if j.get('error'):
+            print(f"error: {j['error']}", file=sys.stderr)
+            return 2
+        restored = list((j.get('output') or []))
         for r in restored:
-            print(r)
+            print((r or {}).get('text', ''))
     return 0
 
 

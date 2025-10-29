@@ -39,18 +39,19 @@ response:
   - `temperature` (number, optional): sampling temperature, default 0.0
 - Response (JSON):
 ```json
-{ "text": "<final_restored_text>" }
+{ "output":{"text": "<final_restored_text>"}, "error": null }
 ```
 
 Example (curl):
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/call \
   -H 'Content-Type: application/json' \
+  # -H 'X-API-Key: <your-key>' \
   -d '{"text":"请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."}'
 ```
 response:
 ```json
-{"text":"我的电子邮件地址是 test@example.com，我的电话号码是 18744325579。"}
+{"output":{"text":"我的电子邮件地址是 test@example.com，我的电话号码是 18744325579。"},"error":null}
 ```
 
 ## Mask and Restore
@@ -69,8 +70,11 @@ Important: paired mask and restore calls must use the same `maskMeta`. `maskMeta
 - Response body:
 ```json
 {
-  "text": "<MASKED_TEXT>",
-  "maskMeta": "<BASE64_PLACEHOLDERSMAP_JSON_BYTES>"
+  "output":{
+    "text": "<masked_text>",
+    "maskMeta": "<base64(placeholdersMap_json_bytes)>"
+  },
+  "error": null
 }
 ```
 
@@ -78,13 +82,17 @@ Example (curl):
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/mask_text \
   -H 'Content-Type: application/json' \
+  # -H 'X-API-Key: <your-key>' \
   -d '{"text":"My email address is test@example.com, and my phone number is 18744325579.","language":"en"}'
 ```
 response:
 ```json
 {
-  "text":"My email address is __PII_EMAIL_ADDRESS_00000001__, and my phone number is __PII_PHONE_NUMBER_00000002__.",
-  "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDJfXyI6ICIxODc0NDMyNTU3OSIsICJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"
+  "output":{
+    "text":"My email address is __PII_EMAIL_ADDRESS_00000001__, and my phone number is __PII_PHONE_NUMBER_00000002__.",
+    "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDJfXyI6ICIxODc0NDMyNTU3OSIsICJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"
+  },
+  "error": null
 }
 ```
 
@@ -102,7 +110,8 @@ response:
 - Response body (to be filled):
 ```json
 {
-  "text": "<RESTORED_TEXT>"
+  "output":{"text": "<restored_text>"},
+  "error": null
 }
 ```
 
@@ -110,11 +119,15 @@ Example (curl):
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/restore_text \
   -H 'Content-Type: application/json' \
+  # -H 'X-API-Key: <your-key>' \
   -d '{"text":"My email address is __PII_EMAIL_ADDRESS_00000001__, and my phone number is __PII_PHONE_NUMBER_00000002__.", "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDJfXyI6ICIxODc0NDMyNTU3OSIsICJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"}'
 ```
 response:
 ```json
-{"text":"My email address is test@example.com, and my phone number is 18744325579."}
+{
+  "output":{"text":"My email address is test@example.com, and my phone number is 18744325579."},
+  "error":null
+}
 ```
 
 ### Python Example
@@ -127,14 +140,15 @@ base = "http://127.0.0.1:8844"
 r = requests.post(f"{base}/api/mask_text", json={"text": "张三电话13812345678", "language": "zh"})
 r.raise_for_status()
 obj = r.json()
-masked_text = obj["text"]
-mask_meta_b64 = obj["maskMeta"]
+output = obj["output"]
+masked_text = output["text"]
+mask_meta_b64 = output["maskMeta"]
 print("masked:", masked_text)
 
 # 2) Example of restore_text (JSON → JSON)
 r2 = requests.post(f"{base}/api/restore_text", json={"text": masked_text, "maskMeta": mask_meta_b64})
 r2.raise_for_status()
-print("restored:", r2.json()["text"])
+print("restored:", r2.json()["output"]["text"])
 ```
 
 ### Node.js (fetch) Example
@@ -150,8 +164,8 @@ const jr = await fetch(`${base}/api/mask_text`, {
 });
 if (!jr.ok) throw new Error(`mask_text http ${jr.status}`);
 const obj = await jr.json();
-const maskedText = obj.text;
-const maskMetaB64 = obj.maskMeta;
+const maskedText = (obj.output || {}).text;
+const maskMetaB64 = (obj.output || {}).maskMeta;
 console.log('masked:', maskedText);
 
 // 2) Example of restore_text (JSON → JSON)
@@ -162,7 +176,7 @@ const rr = await fetch(`${base}/api/restore_text`, {
 });
 if (!rr.ok) throw new Error(`restore_text http ${rr.status}`);
 const restoredObj = await rr.json();
-console.log('restored:', restoredObj.text);
+console.log('restored:', (restoredObj.output || {}).text);
 
 ## Batch interfaces
 
@@ -171,13 +185,14 @@ console.log('restored:', restoredObj.text);
 - Request Content-Type: `application/json`
 - Request body: JSON array of objects `{ text, language? }`
 - Response Content-Type: `application/json`
-- Response body (to be filled):
+- Response body:
 ```json
 {
-  "resp_array": [
-    { "text": "<MASKED_TEXT_1>", "maskMeta": "<BASE64_META_1>" },
-    { "text": "<MASKED_TEXT_2>", "maskMeta": "<BASE64_META_2>" }
-  ]
+  "output": [
+    { "text": "<masked_text_1>", "maskMeta": "<base64_meta_1>" },
+    { "text": "<masked_text_2>", "maskMeta": "<base64_meta_2>" }
+  ],
+  "error": null
 }
 ```
 
@@ -185,16 +200,19 @@ Example (curl):
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/mask_text_batch \
   -H 'Content-Type: application/json' \
+  # -H 'X-API-Key: <your-key>' \
   -d '[{"text":"My email address is test@example.com"}, {"text":"and my phone number is 18744325579.","language":"en"}]'
 ```
 response:
 ```json
-{"resp_array":[
+{
+  "output":[
     {"text":"My email address is __PII_EMAIL_ADDRESS_00000001__",
      "maskMeta":"eyJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"},
     {"text":"and my phone number is __PII_PHONE_NUMBER_00000001__.",
      "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDFfXyI6ICIxODc0NDMyNTU3OSJ9"}
-  ]
+  ],
+  "error": null
 }
 ```
 
@@ -203,13 +221,14 @@ response:
 - Request Content-Type: `application/json`
 - Request body: JSON array of objects `{ text, maskMeta }` (maskMeta is base64 string)
 - Response Content-Type: `application/json`
-- Response body (to be filled):
+- Response body:
 ```json
 {
-  "restored_array": [
-    "<RESTORED_TEXT_1>",
-    "<RESTORED_TEXT_2>"
-  ]
+  "output": [
+    {"text":"<restored_text_1>"},
+    {"text":"<restored_text_2>"}
+  ],
+  "error": null
 }
 ```
 
@@ -217,11 +236,18 @@ Example (curl):
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/restore_text_batch \
   -H 'Content-Type: application/json' \
+  # -H 'X-API-Key: <your-key>' \
   -d '[{"text":"My email address is __PII_EMAIL_ADDRESS_00000001__","maskMeta":"eyJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"},{"text":"and my phone number is __PII_PHONE_NUMBER_00000001__.","maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDFfXyI6ICIxODc0NDMyNTU3OSJ9"}]'
 ```
 response:
 ```json
-{"restored_array":["My email address is test@example.com","and my phone number is 18744325579."]}
+{
+  "output":[
+    {"text":"My email address is test@example.com"},
+    {"text":"and my phone number is 18744325579."}
+  ],
+  "error":null
+}
 ```
 
 ## Notes

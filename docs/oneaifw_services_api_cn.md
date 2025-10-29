@@ -39,18 +39,19 @@ curl -s -X GET http://127.0.0.1:8844/api/health
   - `temperature` (number, 可选)：采样温度，默认 0.0
 - 响应（JSON）：
 ```json
-{ "text": "<final_restored_text>" }
+{ "output":{"text": "<final_restored_text>"}, "error": null }
 ```
 
 示例（curl）：
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/call \
   -H 'Content-Type: application/json' \
+  # -H 'X-API-Key: <your-key>' \
   -d '{"text":"请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."}'
 ```
 响应:
 ```json
-{"text":"我的电子邮件地址是 test@example.com，我的电话号码是 18744325579。"}
+{"output":{"text":"我的电子邮件地址是 test@example.com，我的电话号码是 18744325579。"},"error":null}
 ```
 
 ## 匿名化与反匿名化
@@ -71,8 +72,11 @@ curl -s -X POST http://127.0.0.1:8844/api/call \
 - 响应体：
 ```json
 {
-  "text": "<masked_text>",
-  "maskMeta": "<base64(placeholdersMap_json_bytes)>"
+  "output":{
+    "text": "<masked_text>",
+    "maskMeta": "<base64(placeholdersMap_json_bytes)>"
+  },
+  "error": null
 }
 ```
 
@@ -80,13 +84,17 @@ curl -s -X POST http://127.0.0.1:8844/api/call \
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/mask_text \
   -H 'Content-Type: application/json' \
+  # -H 'X-API-Key: <your-key>' \
   -d '{"text":"My email address is test@example.com, and my phone number is 18744325579.","language":"en"}'
 ```
 响应:
 ```json
 {
-  "text":"My email address is __PII_EMAIL_ADDRESS_00000001__, and my phone number is __PII_PHONE_NUMBER_00000002__.",
-  "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDJfXyI6ICIxODc0NDMyNTU3OSIsICJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"
+  "output":{
+    "text":"My email address is __PII_EMAIL_ADDRESS_00000001__, and my phone number is __PII_PHONE_NUMBER_00000002__.",
+    "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDJfXyI6ICIxODc0NDMyNTU3OSIsICJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"
+  },
+  "error": null
 }
 ```
 
@@ -96,7 +104,7 @@ curl -s -X POST http://127.0.0.1:8844/api/mask_text \
 - 请求体：
 ```json
 {
-  "text": "<上一阶段返回的 masked_text>",
+  "text": "<上一阶段返回的或翻译处理后的 masked_text>",
   "maskMeta": "<上一阶段返回的 base64(maskMeta)>"
 }
 ```
@@ -104,7 +112,8 @@ curl -s -X POST http://127.0.0.1:8844/api/mask_text \
 - 响应体：
 ```json
 {
-  "text": "<restored_text>"
+  "output":{"text": "<restored_text>"},
+  "error": null
 }
 ```
 
@@ -112,11 +121,15 @@ curl -s -X POST http://127.0.0.1:8844/api/mask_text \
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/restore_text \
   -H 'Content-Type: application/json' \
+  # -H 'X-API-Key: <your-key>' \
   -d '{"text":"My email address is __PII_EMAIL_ADDRESS_00000001__, and my phone number is __PII_PHONE_NUMBER_00000002__.", "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDJfXyI6ICIxODc0NDMyNTU3OSIsICJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"}'
 ```
 响应:
 ```json
-{"text":"My email address is test@example.com, and my phone number is 18744325579."}
+{
+  "output":{"text":"My email address is test@example.com, and my phone number is 18744325579."},
+  "error":null
+}
 ```
 
 ### Python 使用示例
@@ -129,14 +142,15 @@ base = "http://127.0.0.1:8844"
 r = requests.post(f"{base}/api/mask_text", json={"text": "张三电话13812345678", "language": "zh"})
 r.raise_for_status()
 obj = r.json()
-masked_text = obj["text"]
-mask_meta_b64 = obj["maskMeta"]
+output = obj["output"]
+masked_text = output["text"]
+mask_meta_b64 = output["maskMeta"]
 print("masked:", masked_text)
 
 # 2) 调用例子 restore_text（JSON → JSON）
 r2 = requests.post(f"{base}/api/restore_text", json={"text": masked_text, "maskMeta": mask_meta_b64})
 r2.raise_for_status()
-print("restored:", r2.json()["text"])
+print("restored:", r2.json()["output"]["text"])
 ```
 
 ### Node.js（fetch）示例
@@ -152,8 +166,8 @@ const jr = await fetch(`${base}/api/mask_text`, {
 });
 if (!jr.ok) throw new Error(`mask_text http ${jr.status}`);
 const obj = await jr.json();
-const maskedText = obj.text;
-const maskMetaB64 = obj.maskMeta;
+const maskedText = (obj.output || {}).text;
+const maskMetaB64 = (obj.output || {}).maskMeta;
 console.log('masked:', maskedText);
 
 // 2) 调用例子 restore_text（JSON → JSON）
@@ -164,7 +178,7 @@ const rr = await fetch(`${base}/api/restore_text`, {
 });
 if (!rr.ok) throw new Error(`restore_text http ${rr.status}`);
 const restoredObj = await rr.json();
-console.log('restored:', restoredObj.text);
+console.log('restored:', (restoredObj.output || {}).text);
 ```
 
 ## 批量接口
@@ -174,13 +188,14 @@ console.log('restored:', restoredObj.text);
 - 请求 Content-Type：`application/json`
 - 请求体：对象数组，每项 `{ text, language? }`
 - 响应 Content-Type：`application/json`
-- 响应体（待填充实际内容）：
+- 响应体：
 ```json
 {
-  "resp_array": [
+  "output": [
     { "text": "<masked_text_1>", "maskMeta": "<base64_meta_1>" },
     { "text": "<masked_text_2>", "maskMeta": "<base64_meta_2>" }
-  ]
+  ],
+  "error": null
 }
 ```
 
@@ -188,16 +203,19 @@ console.log('restored:', restoredObj.text);
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/mask_text_batch \
   -H 'Content-Type: application/json' \
-  -d '[{"text":"My email address is test@example.com"}, {"text":"and my phone number is 18744325579.","language":"en"}]'
+  # -H 'X-API-Key: <your-key>' \
+  -d '[{"text":"A"},{"text":"B","language":"zh"}]'
 ```
 响应:
 ```json
-{"resp_array":[
+{
+  "output":[
     {"text":"My email address is __PII_EMAIL_ADDRESS_00000001__",
      "maskMeta":"eyJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"},
     {"text":"and my phone number is __PII_PHONE_NUMBER_00000001__.",
      "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDFfXyI6ICIxODc0NDMyNTU3OSJ9"}
-  ]
+  ],
+  "error": null
 }
 ```
 
@@ -206,13 +224,14 @@ curl -s -X POST http://127.0.0.1:8844/api/mask_text_batch \
 - 请求 Content-Type：`application/json`
 - 请求体：对象数组，每项 `{ text, maskMeta }`（`maskMeta` 为 base64 字符串）
 - 响应 Content-Type：`application/json`
-- 响应体（待填充实际内容）：
+- 响应体：
 ```json
 {
-  "restored_array": [
-    "<restored_text_1>",
-    "<restored_text_2>"
-  ]
+  "output": [
+    {"text":"<restored_text_1>"},
+    {"text":"<restored_text_2>"}
+  ],
+  "error": null
 }
 ```
 
@@ -220,11 +239,18 @@ curl -s -X POST http://127.0.0.1:8844/api/mask_text_batch \
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/restore_text_batch \
   -H 'Content-Type: application/json' \
-  -d '[{"text":"My email address is __PII_EMAIL_ADDRESS_00000001__","maskMeta":"eyJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"},{"text":"and my phone number is __PII_PHONE_NUMBER_00000001__.","maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDFfXyI6ICIxODc0NDMyNTU3OSJ9"}]'
+  # -H 'X-API-Key: <your-key>' \
+  -d '[{"text":"<MASKED_A>","maskMeta":"<BASE64_META_A>"},{"text":"<MASKED_B>","maskMeta":"<BASE64_META_B>"}]'
 ```
 响应:
 ```json
-{"restored_array":["My email address is test@example.com","and my phone number is 18744325579."]}
+{
+  "output":[
+    {"text":"My email address is test@example.com"},
+    {"text":"and my phone number is 18744325579."}
+  ],
+  "error":null
+}
 ```
 
 ## 附注

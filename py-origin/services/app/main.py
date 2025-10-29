@@ -57,44 +57,63 @@ async def api_call(inp: CallIn, x_api_key: Optional[str] = Header(None)):
 	except Exception:
 		months = 6
 	cleanup_monthly_logs(base_log, months)
-	out = api.call(
-		text=inp.text,
-		api_key_file=chosen_key_file,
-		model=inp.model,
-		temperature=inp.temperature or 0.0,
-	)
-	return {"text": out}
+	try:
+		out = api.call(
+			text=inp.text,
+			api_key_file=chosen_key_file,
+			model=inp.model,
+			temperature=inp.temperature or 0.0,
+		)
+		return {"output": {"text": out}, "error": None}
+	except Exception as e:
+		logger.exception("/api/call failed")
+		return {"output": None, "error": {"message": str(e), "code": None}}
 
 
 @app.post("/api/mask_text")
 async def api_mask_text(inp: MaskIn, x_api_key: Optional[str] = Header(None)):
-    check_api_key(x_api_key)
-    res = api.mask_text(text=inp.text, language=inp.language)
-    # JSON response: { text: string, maskMeta: { placeholdersMap: {token: base64}, encoding, charset } }
-    return {"text": res["text"], "maskMeta": res["maskMeta"]}
+	check_api_key(x_api_key)
+	try:
+		res = api.mask_text(text=inp.text, language=inp.language)
+		return {"output": {"text": res["text"], "maskMeta": res["maskMeta"]}, "error": None}
+	except Exception as e:
+		logger.exception("/api/mask_text failed")
+		return {"output": None, "error": {"message": str(e), "code": None}}
 
 
 @app.post("/api/restore_text")
 async def api_restore_text(inp: RestoreIn, x_api_key: Optional[str] = Header(None)):
-    check_api_key(x_api_key)
-    restored = api.restore_text(text=inp.text, mask_meta=inp.maskMeta)
-    return {"text": restored}
+	check_api_key(x_api_key)
+	try:
+		restored = api.restore_text(text=inp.text, mask_meta=inp.maskMeta)
+		return {"output": {"text": restored}, "error": None}
+	except Exception as e:
+		logger.exception("/api/restore_text failed")
+		return {"output": None, "error": {"message": str(e), "code": None}}
 
 
 @app.post("/api/mask_text_batch")
 async def api_mask_text_batch(inp_array: List[MaskIn], x_api_key: Optional[str] = Header(None)):
-    check_api_key(x_api_key)
-    res_array = []
-    for inp in inp_array:
-        res_array.append(api.mask_text(text=inp.text, language=inp.language))
-    return {"resp_array": res_array}
+	check_api_key(x_api_key)
+	try:
+		res_array = []
+		for inp in inp_array:
+			res_array.append(api.mask_text(text=inp.text, language=inp.language))
+		return {"output": res_array, "error": None}
+	except Exception as e:
+		logger.exception("/api/mask_text_batch failed")
+		return {"output": None, "error": {"message": str(e), "code": None}}
 
 
 @app.post("/api/restore_text_batch")
 async def api_restore_text_batch(inp_array: List[RestoreIn], x_api_key: Optional[str] = Header(None)):
-    check_api_key(x_api_key)
-    restored_array = []
-    for inp in inp_array:
-        restored = api.restore_text(text=inp.text, mask_meta=inp.maskMeta)
-        restored_array.append(restored)
-    return {"restored_array": restored_array}
+	check_api_key(x_api_key)
+	try:
+		restored_array = []
+		for inp in inp_array:
+			restored = api.restore_text(text=inp.text, mask_meta=inp.maskMeta)
+			restored_array.append({"text": restored})
+		return {"output": restored_array, "error": None}
+	except Exception as e:
+		logger.exception("/api/restore_text_batch failed")
+		return {"output": None, "error": {"message": str(e), "code": None}}
