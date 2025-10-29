@@ -11,9 +11,9 @@ WORKDIR /opt/aifw
 # Build-time profile to control spaCy models
 ARG SPACY_PROFILE=minimal
 
-# Copy requirements first for better cache
-COPY services/requirements.txt /opt/aifw/services/requirements.txt
-COPY cli/requirements.txt /opt/aifw/cli/requirements.txt
+# Copy requirements first for better cache (context is repo root)
+COPY py-origin/services/requirements.txt /opt/aifw/services/requirements.txt
+COPY py-origin/cli/requirements.txt /opt/aifw/cli/requirements.txt
 
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r /opt/aifw/services/requirements.txt && \
@@ -31,14 +31,14 @@ RUN set -e; \
     find /usr/local/lib -type d -name '__pycache__' -prune -exec rm -rf {} + || true && \
     find /usr/local/lib -type f -name '*.pyc' -delete || true
 
-# Copy only necessary project files to minimize image size
-COPY cli/*.py /opt/aifw/cli/
-COPY aifw/*.py /opt/aifw/aifw/
-COPY services/app/*.py /opt/aifw/services/app/
-COPY services/app/*.json /opt/aifw/services/app/
-COPY services/fake_llm/*.py /opt/aifw/services/fake_llm/
+# Copy only necessary project files to minimize image size (context is repo root)
+COPY py-origin/cli/*.py /opt/aifw/cli/
+COPY py-origin/aifw/*.py /opt/aifw/aifw/
+COPY py-origin/services/app/*.py /opt/aifw/services/app/
+COPY py-origin/services/app/*.json /opt/aifw/services/app/
+COPY py-origin/services/fake_llm/*.py /opt/aifw/services/fake_llm/
 # Copy default config template (no secrets)
-COPY assets/*.yaml assets/*.json /opt/aifw/assets/
+COPY py-origin/assets/*.yaml py-origin/assets/*.json /opt/aifw/assets/
 
 # Ensure runtime dirs; no API keys baked in image
 RUN mkdir -p ${AIFW_WORK_DIR} /var/log/aifw && \

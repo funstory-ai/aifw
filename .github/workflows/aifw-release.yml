@@ -39,8 +39,8 @@ jobs:
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:
-          context: py-origin
-          file: Dockerfile
+          context: .
+          file: py-origin/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: |
@@ -66,6 +66,40 @@ jobs:
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.created=${{ github.event.repository.updated_at }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      # Harbor push with registry cache (action cache on your own server)
+      - name: Login to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: registry.cn-shanghai.aliyuncs.com
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Compute Harbor tags
+        id: harbor_meta
+        run: |
+          IMAGE_BASE=registry.cn-shanghai.aliyuncs.com/immtranslate/oneaifw
+          echo "image_base=${IMAGE_BASE}" >> $GITHUB_OUTPUT
+          TAGS=("${IMAGE_BASE}:${GITHUB_SHA}" "${IMAGE_BASE}:latest")
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAGS+=("${IMAGE_BASE}:${GITHUB_REF_NAME}")
+          fi
+          printf "%s\n" "${TAGS[@]}" | paste -sd"," - | awk '{print "tags=" $0}' >> $GITHUB_OUTPUT
+
+      - name: Build and push to Harbor (with registry cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: web/Dockerfile
+          push: true
+          tags: ${{ steps.harbor_meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Print Harbor image URLs
+        run: |
+          echo "Harbor images:"
+          echo "${{ steps.harbor_meta.outputs.tags }}" | tr ',' '\n'
 
       - name: Start fake LLM (echo) on runner
         run: |
