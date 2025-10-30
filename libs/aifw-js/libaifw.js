@@ -1,7 +1,10 @@
 let session = null;
 let wasm = null;
 let nerLib = null;
-let ner = null;
+let nerPipelines = {
+  default: null,
+  zh: null,
+};
 
 // Helpers
 export class MatchedPIISpan {
@@ -72,7 +75,7 @@ async function loadAifwCore(wasmBase) {
 }
 
 export async function init({ wasmBase = '/wasm/', modelsBase = '/models/' }) {
-  // wire wasm exports from host or auto-load
+  // load aifw core wasm library
   wasm = await loadAifwCore(wasmBase);
   // load NER lib and pipeline (relative import for packaged lib)
   nerLib = await import('./libner.js');
@@ -81,8 +84,18 @@ export async function init({ wasmBase = '/wasm/', modelsBase = '/models/' }) {
   const threads = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) ? Math.max(1, navigator.hardwareConcurrency) : 1;
   nerLib.initEnv({ wasmBase, modelsBase, threads, simd: true });
 
-  const modelId = 'funstory-ai/neurobert-mini';
-  ner = await nerLib.buildNerPipeline(modelId, { quantized: true });
+  // Preload NER pipelines for EN(default) and ZH
+  const enModelId = 'funstory-ai/neurobert-mini';
+  const zhModelId = 'ckiplab/bert-tiny-chinese-ner';
+  const [enPipe, zhPipe] = await Promise.all([
+    nerLib.buildNerPipeline(enModelId, { quantized: true }).catch((e) => { console.warn('load EN model failed', e); return null; }),
+    nerLib.buildNerPipeline(zhModelId, { quantized: true }).catch((e) => { console.warn('load ZH model failed', e); return null; }),
+  ]);
+  nerPipelines.default = enPipe;
+  nerPipelines.zh = zhPipe || enPipe;
+  if (!zhPipe) {
+    console.warn('load zh NER model failed, using en model instead.');
+  }
 
   session = await createSession();
 }
@@ -92,7 +105,7 @@ export async function deinit() {
   wasm.aifw_shutdown();
   // nothing special; GC will collect JS objects
   session = null;
-  ner = null;
+  nerPipelines = { default: null, zh: null };
   nerLib = null;
   wasm = null;
 }
@@ -125,9 +138,21 @@ async function destroySession(session) {
   }
 }
 
-export async function maskText(inputText) {
+function selectNer(language) {
+  const lang = String(language || '').toLowerCase();
+  // Treat zh, zh-cn, zh-tw, zh-hans, zh-hant as Chinese
+  if (lang === 'zh' || lang.startsWith('zh-')) {
+    console.log('select zh NER pipeline.');
+    return nerPipelines.zh || nerPipelines.default;
+  }
+  console.log('select en NER pipeline.', nerPipelines.default);
+  return nerPipelines.default;
+}
+
+export async function maskText(inputText, language) {
   if (!wasm || !session?.handle) throw new Error('invalid session handle');
-  if (!ner) throw new Error('NER pipeline not ready');
+  const nerPipe = selectNer(language);
+  if (!nerPipe) throw new Error('NER pipeline not ready');
 
   let zigInputText = null;
   let nerBuf = null;
@@ -135,8 +160,8 @@ export async function maskText(inputText) {
   let outMaskMetaPtrPtr = 0;
   try {
     zigInputText = allocZigStrFromJs(inputText);
-    const items = await ner.run(inputText);
-    nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText.length);
+    const items = await nerPipe.run(inputText);
+    nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText);
 
     outMaskedPtrPtr = wasm.aifw_malloc(4);
     outMaskMetaPtrPtr = wasm.aifw_malloc(4);
@@ -194,10 +219,32 @@ export async function restoreText(maskedText, maskMeta) {
   }
 }
 
-// Get PII spans for a given text using current NER output
-export async function getPiiSpans(inputText) {
+// Batch mask: inputs can be array of strings or { text, language }
+export async function maskTextBatch(textAndLanguageArray) {
+  if (!Array.isArray(textAndLanguageArray)) throw new Error('maskTextBatch: textAndLanguageArray must be an array');
+  const tasks = textAndLanguageArray.map((it) => {
+    const { text, language } = it || {};
+    return maskText(String(text || ''), language);
+  });
+  const results = await Promise.all(tasks);
+  return results.map(([masked, maskMeta]) => ({ text: masked, maskMeta }));
+}
+
+// Batch restore: items = array of { text: maskedText, maskMeta }
+export async function restoreTextBatch(textAndMaskMetaArray) {
+  if (!Array.isArray(textAndMaskMetaArray)) throw new Error('restoreTextBatch: textAndMaskMetaArray must be an array');
+  const tasks = textAndMaskMetaArray.map((it) => {
+    const obj = it || {};
+    return restoreText(String(obj.text || ''), obj.maskMeta);
+  });
+  const results = await Promise.all(tasks);
+  return results.map((restored) => ({ text: restored }));
+}
+
+export async function getPiiSpans(inputText, language) {
   if (!wasm || !session?.handle) throw new Error('invalid session handle');
-  if (!ner) throw new Error('NER pipeline not ready');
+  const nerPipe = selectNer(language);
+  if (!nerPipe) throw new Error('NER pipeline not ready');
 
   let zigInputText = null;
   let nerBuf = null;
@@ -205,8 +252,8 @@ export async function getPiiSpans(inputText) {
   let outCountPtr = 0;
   try {
     zigInputText = allocZigStrFromJs(inputText);
-    const items = await ner.run(inputText);
-    nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText.length);
+    const items = await nerPipe.run(inputText);
+    nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText);
 
     outSpansPtrPtr = wasm.aifw_malloc(4);
     outCountPtr = wasm.aifw_malloc(4);

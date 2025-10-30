@@ -17,6 +17,14 @@
   <body>
     <h1>OneAIFW Offline</h1>
     <div class="row">
+      <label for="lang">Language</label>
+      <select id="lang">
+        <option value="zh">Chinese (Simplified)</option>
+        <option value="zh-TW">Chinese (Traditional)</option>
+        <option value="en" selected>English</option>
+      </select>
+    </div>
+    <div class="row">
       <label for="text">Input text</label>
       <textarea id="text" placeholder="Type text with PII here..."></textarea>
     </div>
@@ -62,28 +70,26 @@
 
             const textStr = textEl.value || '';
             const lines = textStr.split(/\r?\n/);
+            const language = (document.getElementById('lang')?.value) || 'en';
             const maskedLines = [];
             const metas = [];
             for (const line of lines) {
-              const [masked, meta] = await aifw.maskText(line);
+              const [masked, meta] = await aifw.maskText(line, language);
               maskedLines.push(masked);
               metas.push(meta);
             }
             const maskedStr = maskedLines.join('\n');
             maskedEl.textContent = maskedStr;
 
-            const restoredLines = [];
-            for (let i = 0; i < maskedLines.length; i++) {
-              const rest = await aifw.restoreText(maskedLines[i], metas[i]);
-              restoredLines.push(rest);
-            }
-            const restoredStr = restoredLines.join('\n');
+            const batchItems = maskedLines.map((m, i) => ({ text: m, maskMeta: metas[i] }));
+            const restoredObjs = await aifw.restoreTextBatch(batchItems);
+            const restoredStr = restoredObjs.map((o) => (o && o.text) || '').join('\n');
             restoredEl.textContent = restoredStr;
 
             // Test restore with empty masked text for just freeing meta, should return empty string
             try {
               const test_text = "Hi, my email is example.test@funstory.com, my phone number is 13800138027, my name is John Doe";
-              const [masked, meta] = await aifw.maskText(test_text);
+              const [masked, meta] = await aifw.maskText(test_text, language);
               const emptied = await aifw.restoreText('', meta);
               // Expect empty string; log for debug without affecting UI
               console.log('[webapp] empty-restore result length:', emptied.length);
@@ -93,7 +99,7 @@
 
             // Test getPiiSpans API on the original input
             try {
-              const spans = await aifw.getPiiSpans(textStr);
+              const spans = await aifw.getPiiSpans(textStr, language);
               console.log('[webapp] getPiiSpans spans:', spans);
             } catch (e) {
               console.warn('[webapp] getPiiSpans failed:', e);

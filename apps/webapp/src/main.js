@@ -3,6 +3,34 @@ const textEl = document.getElementById('text');
 const maskedEl = document.getElementById('masked');
 const restoredEl = document.getElementById('restored');
 const runBtn = document.getElementById('run');
+// Create language selector just above the textarea if not present
+let langEl = document.getElementById('lang');
+if (!langEl && textEl && textEl.parentElement) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  const label = document.createElement('label');
+  label.htmlFor = 'lang';
+  label.textContent = 'Language';
+  const select = document.createElement('select');
+  select.id = 'lang';
+  // Supported: Simplified Chinese, Traditional Chinese, English
+  const opts = [
+    { v: 'zh', t: 'Chinese (Simplified)' },
+    { v: 'zh-TW', t: 'Chinese (Traditional)' },
+    { v: 'en', t: 'English' },
+  ];
+  for (const { v, t } of opts) {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = t; select.appendChild(o);
+  }
+  // default to English
+  select.value = 'en';
+  row.appendChild(label);
+  row.appendChild(select);
+  // insert before the textarea row
+  textEl.parentElement.parentElement?.insertBefore(row, textEl.parentElement);
+  langEl = select;
+}
 
 let aifw; // wrapper lib
 
@@ -29,29 +57,27 @@ async function main() {
       restoredEl.textContent = '';
 
       const textStr = textEl.value || '';
+      const language = (langEl && langEl.value) || 'en';
       const lines = textStr.split(/\r?\n/);
       const maskedLines = [];
       const metas = [];
       for (const line of lines) {
-        const [masked, meta] = await aifw.maskText(line);
+        const [masked, meta] = await aifw.maskText(line, language);
         maskedLines.push(masked);
         metas.push(meta);
       }
       const maskedStr = maskedLines.join('\n');
       maskedEl.textContent = maskedStr;
 
-      const restoredLines = [];
-      for (let i = 0; i < maskedLines.length; i++) {
-        const rest = await aifw.restoreText(maskedLines[i], metas[i]);
-        restoredLines.push(rest);
-      }
-      const restoredStr = restoredLines.join('\n');
+      const batchItems = maskedLines.map((m, i) => ({ text: m, maskMeta: metas[i] }));
+      const restoredObjs = await aifw.restoreTextBatch(batchItems);
+      const restoredStr = restoredObjs.map((o) => (o && o.text) || '').join('\n');
       restoredEl.textContent = restoredStr;
 
       // Test restore with empty masked text for just freeing meta, should return empty string
       try {
         const test_text = "Hi, my email is example.test@funstory.com, my phone number is 13800138027, my name is John Doe";
-        const [masked, meta] = await aifw.maskText(test_text);
+        const [masked, meta] = await aifw.maskText(test_text, language);
         const emptied = await aifw.restoreText('', meta);
         // Expect empty string; log for debug without affecting UI
         console.log('[webapp] empty-restore result length:', emptied.length);
@@ -61,7 +87,7 @@ async function main() {
 
       // Test getPiiSpans API on the original input
       try {
-        const spans = await aifw.getPiiSpans(textStr);
+        const spans = await aifw.getPiiSpans(textStr, language);
         console.log('[webapp] getPiiSpans spans:', spans);
       } catch (e) {
         console.warn('[webapp] getPiiSpans failed:', e);

@@ -63,7 +63,6 @@ export class TokenClassificationPipeline {
     }
 
     const offsets = computeOffsetsFromTokens(text, tokensPlain);
-
     const outputs = await this.model(enc);
     const logits = outputs.logits;
     const dims = logits.dims || [];
@@ -167,7 +166,7 @@ export function mergeSubwordItems(items) {
   const out = [];
   let cur = null;
   let count = 0;
-  const core = (e) => (e.startsWith('B-') || e.startsWith('I-')) ? e.slice(2) : e;
+  const core = (e) => (e.startsWith('B-') || e.startsWith('I-') || e.startsWith('E-')) ? e.slice(2) : e;
 
   for (const it of items) {
     if (!cur) { cur = { ...it }; count = 1; continue; }
@@ -235,7 +234,7 @@ function findStrippedIndexAtOrAfter(map, origIndex) {
 //   uint32 start;
 //   uint32 end;
 // } // total 20 bytes
-export function buildNerEntitiesBuffer(wasm, items, textLen) {
+export function buildNerEntitiesBuffer(wasm, items, jsText) {
   if (!items?.length) return { ptr: 0, count: 0, owned: [], byteSize: 0 };
   const structSize = 20;
   const count = items.length >>> 0;
@@ -243,6 +242,10 @@ export function buildNerEntitiesBuffer(wasm, items, textLen) {
   const arrPtr = wasm.aifw_malloc(total);
   if (!arrPtr) throw new Error('aifw_malloc ner entities failed');
   const dv = new DataView(wasm.memory.buffer);
+
+  const isText = typeof jsText === 'string';
+  const textLen = isText ? jsText.length : Number(jsText || 0);
+  const utf8Map = isText ? computeUtf8OffsetMap(jsText) : null;
 
   // Keep in sync with core/recog_entity.zig
   const EntityType = {
@@ -272,7 +275,7 @@ export function buildNerEntitiesBuffer(wasm, items, textLen) {
   };
   const toEntityType = (core) => {
     switch (core) {
-      case 'PER': return EntityType.USER_MAME;
+      case 'PER': case 'PERSON': return EntityType.USER_MAME;
       case 'ORG': return EntityType.ORGANIZATION;
       case 'LOC': return EntityType.PHYSICAL_ADDRESS;
       case 'MISC': return EntityType.None;
@@ -284,6 +287,13 @@ export function buildNerEntitiesBuffer(wasm, items, textLen) {
     const it = items[i];
     let s = Math.max(0, Math.min(textLen, Number(it.start || 0)));
     let e = Math.max(s, Math.min(textLen, Number(it.end || 0)));
+    // Convert character indices to UTF-8 byte indices for the core
+    if (utf8Map) {
+      const sByte = utf8Map[s] ?? 0;
+      const eByte = utf8Map[e] ?? utf8Map[textLen] ?? sByte;
+      s = sByte;
+      e = Math.max(sByte, eByte);
+    }
     const base = arrPtr + i * structSize;
     const [entityCore, tagVal] = toCoreAndTag(it.entity);
     const entityTypeVal = toEntityType(entityCore);
@@ -297,4 +307,22 @@ export function buildNerEntitiesBuffer(wasm, items, textLen) {
     dv.setUint32(base + 16, e >>> 0, true);
   }
   return { ptr: arrPtr, count, owned: [], byteSize: total };
+}
+
+// Build a map from JS string index (UTF-16 code unit index) to UTF-8 byte offset
+function computeUtf8OffsetMap(text) {
+  const map = new Array(text.length + 1);
+  let bytePos = 0;
+  let i = 0;
+  while (i < text.length) {
+    map[i] = bytePos;
+    const cp = text.codePointAt(i);
+    const cuLen = cp > 0xFFFF ? 2 : 1;
+    let utf8Len = 0;
+    if (cp <= 0x7F) utf8Len = 1; else if (cp <= 0x7FF) utf8Len = 2; else if (cp <= 0xFFFF) utf8Len = 3; else utf8Len = 4;
+    bytePos += utf8Len;
+    i += cuLen;
+  }
+  map[text.length] = bytePos;
+  return map;
 }
