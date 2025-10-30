@@ -4,12 +4,12 @@
 
 默认服务地址：`http://127.0.0.1:8844`
 
-可选鉴权：请求头 `X-API-Key`（仅当服务端启用了 API_KEY 时生效）。
+可选鉴权：请求头 `Authorization`（仅当服务端启用了 API_KEY 时生效），值可以是 `<key>` 或 `Bearer <key>`。
 
 ### 通用说明
 - 字符编码：UTF-8
 - 错误返回：
-  - 401 Unauthorized：缺少或错误的 `X-API-Key`
+  - 401 Unauthorized：缺少或错误的 `Authorization`
   - 400 Bad Request：非法请求内容
 
 ## 健康检查
@@ -32,6 +32,7 @@ curl -s -X GET http://127.0.0.1:8844/api/health
 ## LLM匿名化调用（匿名化 → LLM → 反匿名化）
 - 方法/路径：POST `/api/call`
 - Content-Type：`application/json`
+- 请求头：`Authorization: <your-key>`（若服务端启用鉴权）
 - 请求体字段：
   - `text` (string, 必填)：原始输入文本
   - `apiKeyFile` (string, 可选)：后端读取的 LLM API 配置文件路径；若省略，使用环境变量 `AIFW_API_KEY_FILE`
@@ -46,7 +47,7 @@ curl -s -X GET http://127.0.0.1:8844/api/health
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/call \
   -H 'Content-Type: application/json' \
-  # -H 'X-API-Key: <your-key>' \
+  # -H 'Authorization: Bearer <your-key>' \
   -d '{"text":"请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."}'
 ```
 响应:
@@ -65,6 +66,7 @@ curl -s -X POST http://127.0.0.1:8844/api/call \
 ### 匿名化接口（生成 masked text 与 maskMeta）
 - 方法/路径：POST `/api/mask_text`
 - 请求 Content-Type：`application/json`
+- 请求头：`Authorization: <your-key>`（若服务端启用鉴权）
 - 请求体字段：
   - `text` (string, 必填)：原始输入文本
   - `language` (string, 可选)：语言提示（如 `en`、`zh`）；若省略，服务端自动检测
@@ -84,7 +86,7 @@ curl -s -X POST http://127.0.0.1:8844/api/call \
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/mask_text \
   -H 'Content-Type: application/json' \
-  # -H 'X-API-Key: <your-key>' \
+  # -H 'Authorization: Bearer <your-key>' \
   -d '{"text":"My email address is test@example.com, and my phone number is 18744325579.","language":"en"}'
 ```
 响应:
@@ -101,6 +103,7 @@ curl -s -X POST http://127.0.0.1:8844/api/mask_text \
 ### 反匿名化接口（输入 masked text 与 maskMeta 得到反匿名化后的文本）
 - 方法/路径：POST `/api/restore_text`
 - 请求 Content-Type：`application/json`
+- 请求头：`Authorization: <your-key>`（若服务端启用鉴权）
 - 请求体：
 ```json
 {
@@ -121,7 +124,7 @@ curl -s -X POST http://127.0.0.1:8844/api/mask_text \
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/restore_text \
   -H 'Content-Type: application/json' \
-  # -H 'X-API-Key: <your-key>' \
+  # -H 'Authorization: Bearer <your-key>' \
   -d '{"text":"My email address is __PII_EMAIL_ADDRESS_00000001__, and my phone number is __PII_PHONE_NUMBER_00000002__.", "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDJfXyI6ICIxODc0NDMyNTU3OSIsICJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"}'
 ```
 响应:
@@ -186,6 +189,7 @@ console.log('restored:', (restoredObj.output || {}).text);
 ### 匿名化批量接口：mask_text_batch
 - 方法/路径：POST `/api/mask_text_batch`
 - 请求 Content-Type：`application/json`
+- 请求头：`Authorization: <your-key>`（若服务端启用鉴权）
 - 请求体：对象数组，每项 `{ text, language? }`
 - 响应 Content-Type：`application/json`
 - 响应体：
@@ -203,7 +207,7 @@ console.log('restored:', (restoredObj.output || {}).text);
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/mask_text_batch \
   -H 'Content-Type: application/json' \
-  # -H 'X-API-Key: <your-key>' \
+  # -H 'Authorization: Bearer <your-key>' \
   -d '[{"text":"A"},{"text":"B","language":"zh"}]'
 ```
 响应:
@@ -222,6 +226,7 @@ curl -s -X POST http://127.0.0.1:8844/api/mask_text_batch \
 ### 反匿名化批量接口：restore_text_batch
 - 方法/路径：POST `/api/restore_text_batch`
 - 请求 Content-Type：`application/json`
+- 请求头：`Authorization: <your-key>`（若服务端启用鉴权）
 - 请求体：对象数组，每项 `{ text, maskMeta }`（`maskMeta` 为 base64 字符串）
 - 响应 Content-Type：`application/json`
 - 响应体：
@@ -239,7 +244,7 @@ curl -s -X POST http://127.0.0.1:8844/api/mask_text_batch \
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/restore_text_batch \
   -H 'Content-Type: application/json' \
-  # -H 'X-API-Key: <your-key>' \
+  # -H 'Authorization: Bearer <your-key>' \
   -d '[{"text":"<MASKED_A>","maskMeta":"<BASE64_META_A>"},{"text":"<MASKED_B>","maskMeta":"<BASE64_META_B>"}]'
 ```
 响应:
@@ -255,4 +260,4 @@ curl -s -X POST http://127.0.0.1:8844/api/restore_text_batch \
 
 ## 附注
 - `maskMeta` 的内容在服务端是 `placeholdersMap` 的 UTF-8 JSON 字节整体 base64 编码；客户端无需理解其结构，按原样传回 `restore_text` 即可。
-- 若启用鉴权，请在请求头携带 `X-API-Key`。
+- 若启用鉴权，请在请求头携带 `Authorization`（值可以是 `<key>` 或 `Bearer <key>`）。

@@ -28,17 +28,24 @@ python -m spacy download zh_core_web_sm
 python -m spacy download xx_ent_wiki_sm
 ```
 
-### Prepare config and API key file
+### Prepare config and LLM API key file
 The default aifw.yaml is in assets directory, you can modify this file for yourself.
 
 ```bash
 cd py-origin
 mkdir -p ~/.aifw
 cp assets/aifw.yaml ~/.aifw/aifw.yaml
-# edit ~/.aifw/aifw.yaml and set api_key_file to your key JSON
+# edit ~/.aifw/aifw.yaml and set api_key_file to your LLM API key JSON
 ```
 
 ### Launch HTTP server
+If you want HTTP server API has a authorization, you should set environment variable
+AIFW_HTTP_API_KEY with bash command:
+```bash
+# The 8H234B can be replaced by your key
+export AIFW_HTTP_API_KEY=8H234B
+```
+
 The default output of logger is file
 ```bash
 cd py-origin
@@ -56,7 +63,7 @@ cd py-origin
 python -m aifw call "请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
 ```
 
-You can override the API key file per call using `--api-key-file`:
+You can override the LLM API key file per call using `--api-key-file`:
 ```bash
 cd py-origin
 python -m aifw call --api-key-file /path/to/api-keys/your-key.json "..."
@@ -88,7 +95,7 @@ For all configurable parameters, the resolution order is:
 2. Environment variables
 3. Config file (`aifw.yaml`)
 
-For example, the API key file is resolved as:
+For example, the LLM API key file is resolved as:
 
 - CLI: `--api-key-file`
 - Env: `AIFW_API_KEY_FILE`
@@ -230,7 +237,7 @@ This test exercises the full mask/restore pipeline, including the Rust regex rec
 - Placeholders are generated without heap allocations using a stack buffer; metadata stores only `(EntityType, serial)` to minimize memory and avoid pointer invalidation.
 - Rust regex is implemented with `regex-automata` and exposed via a C ABI static library; it is built for native and WASM targets and linked into the Zig core.
 
-## API key JSON format (OpenAI-compatible)
+## LLM API key JSON format (OpenAI-compatible)
 
 Example:
 ```json
@@ -241,7 +248,7 @@ Example:
 }
 ```
 
-- openai-api-key: Your API key string used for authentication.
+- openai-api-key: Your LLM API key string used for authentication.
 - openai-base-url: Base URL of an OpenAI-compatible endpoint (e.g., OpenAI, a gateway, or a vendor’s OpenAI-style API).
 - openai-model: Default model identifier for requests (can be overridden internally as needed).
 
@@ -294,7 +301,7 @@ docker build --build-arg SPACY_PROFILE=multi -t oneaifw:multi .
 
 ### Set api_key_file for Docker
 
-You can provide the API key file to the container via an environment variable and a bind mount. Two options:
+You can provide the LLM API key file to the container via an environment variable and a bind mount. Two options:
 
 - Put your key file inside your host work dir (`~/.aifw`) and mount the directory:
 ```bash

@@ -98,6 +98,14 @@ def _get_effective_with_env(arg_val, env_names: list[str], cfg_val, default_val=
             return val
     return cfg_val if cfg_val not in (None, "") else default_val
 
+
+def _build_headers(base_headers: dict[str, str] | None, cfg: dict, args: argparse.Namespace) -> dict[str, str]:
+    headers = dict(base_headers or {})
+    auth = _get_effective_with_env(getattr(args, 'http_api_key', None), ['AIFW_HTTP_API_KEY'], cfg.get('http_api_key'), None)
+    if auth:
+        headers['Authorization'] = str(auth)
+    return headers
+
 def _find_and_load_config(config_arg: str | None, work_dir_arg: str | None) -> tuple[dict, str | None]:
     cfg_path = None
     for p in _candidate_config_paths(config_arg, work_dir_arg):
@@ -314,6 +322,10 @@ def cmd_launch(args: argparse.Namespace) -> int:
         return 1
     if api_key_file:
         env["AIFW_API_KEY_FILE"] = os.path.abspath(api_key_file)
+    # Propagate HTTP API key to backend if provided (or via env/config)
+    http_api_key = _get_effective_with_env(getattr(args, 'http_api_key', None), ['AIFW_HTTP_API_KEY'], cfg.get('http_api_key'), None)
+    if http_api_key:
+        env["AIFW_HTTP_API_KEY"] = str(http_api_key)
     # Ensure backend package importable
     env["PYTHONPATH"] = (
         (PROJECT_ROOT + (os.pathsep + env.get("PYTHONPATH", "") if env.get("PYTHONPATH") else ""))
@@ -450,7 +462,8 @@ def cmd_http_call(args: argparse.Namespace) -> int:
     # Derive URL from port (priority: CLI > env > config > default)
     call_port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), 8844) or 8844)
     url = f"http://localhost:{call_port}/api/call"
-    req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+    headers = _build_headers({'Content-Type': 'application/json'}, cfg, args)
+    req = urllib.request.Request(url, data=data, headers=headers)
     try:
         with urllib.request.urlopen(req) as resp:
             body = resp.read().decode('utf-8')
@@ -501,7 +514,8 @@ def cmd_mask_restore(args: argparse.Namespace) -> int:
     url_mask = f"http://localhost:{port}/api/mask_text"
     payload_mask = {"text": text, "language": language}
     data_mask = json.dumps(payload_mask, ensure_ascii=False).encode('utf-8')
-    req_mask = urllib.request.Request(url_mask, data=data_mask, headers={'Content-Type': 'application/json'})
+    headers = _build_headers({'Content-Type': 'application/json'}, cfg, args)
+    req_mask = urllib.request.Request(url_mask, data=data_mask, headers=headers)
     try:
         with urllib.request.urlopen(req_mask) as resp:
             body = resp.read().decode('utf-8', errors='replace')
@@ -528,7 +542,8 @@ def cmd_mask_restore(args: argparse.Namespace) -> int:
     url_restore = f"http://localhost:{port}/api/restore_text"
     payload_restore = {"text": masked_text, "maskMeta": mask_meta}
     data_restore = json.dumps(payload_restore, ensure_ascii=False).encode('utf-8')
-    req_restore = urllib.request.Request(url_restore, data=data_restore, headers={'Content-Type': 'application/json'})
+    headers = _build_headers({'Content-Type': 'application/json'}, cfg, args)
+    req_restore = urllib.request.Request(url_restore, data=data_restore, headers=headers)
     try:
         with urllib.request.urlopen(req_restore) as resp:
             body = resp.read().decode('utf-8', errors='replace')
@@ -565,7 +580,8 @@ def cmd_mask_restore_batch(args: argparse.Namespace) -> int:
     url_mask = f"http://localhost:{port}/api/mask_text_batch"
     payload = [{"text": t, "language": language} for t in texts]
     data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-    req = urllib.request.Request(url_mask, data=data, headers={'Content-Type': 'application/json'})
+    headers = _build_headers({'Content-Type': 'application/json'}, cfg, args)
+    req = urllib.request.Request(url_mask, data=data, headers=headers)
     try:
         with urllib.request.urlopen(req) as resp:
             body = resp.read().decode('utf-8', errors='replace')
@@ -589,7 +605,8 @@ def cmd_mask_restore_batch(args: argparse.Namespace) -> int:
     url_restore = f"http://localhost:{port}/api/restore_text_batch"
     restore_payload = [{"text": m, "maskMeta": mm} for m, mm in zip(masked, metas)]
     data2 = json.dumps(restore_payload, ensure_ascii=False).encode('utf-8')
-    req2 = urllib.request.Request(url_restore, data=data2, headers={'Content-Type': 'application/json'})
+    headers = _build_headers({'Content-Type': 'application/json'}, cfg, args)
+    req2 = urllib.request.Request(url_restore, data=data2, headers=headers)
     try:
         with urllib.request.urlopen(req2) as resp:
             body = resp.read().decode('utf-8', errors='replace')
@@ -618,14 +635,15 @@ def cmd_multi_mask_one_restore(args: argparse.Namespace) -> int:
 
     masked: list[str] = []
     metas: list[str] = []
-    restore_payload: list[RestoreIn] = []
+    restore_payload: list[dict] = []
 
     # multiple mask_text
     for t in texts:
         url_mask = f"http://localhost:{port}/api/mask_text"
         payload = {"text": t, "language": language}
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-        req = urllib.request.Request(url_mask, data=data, headers={'Content-Type': 'application/json'})
+        headers = _build_headers({'Content-Type': 'application/json'}, cfg, args)
+        req = urllib.request.Request(url_mask, data=data, headers=headers)
         with urllib.request.urlopen(req) as resp:
             body = resp.read().decode('utf-8', errors='replace')
             j = json.loads(body)
@@ -641,7 +659,8 @@ def cmd_multi_mask_one_restore(args: argparse.Namespace) -> int:
     # single restore_text_batch
     url_restore = f"http://localhost:{port}/api/restore_text_batch"
     data2 = json.dumps(restore_payload, ensure_ascii=False).encode('utf-8')
-    req2 = urllib.request.Request(url_restore, data=data2, headers={'Content-Type': 'application/json'})
+    headers = _build_headers({'Content-Type': 'application/json'}, cfg, args)
+    req2 = urllib.request.Request(url_restore, data=data2, headers=headers)
     with urllib.request.urlopen(req2) as resp:
         body = resp.read().decode('utf-8', errors='replace')
         j = json.loads(body)
@@ -747,6 +766,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_launch.add_argument("--config", help="Path to aifw config file (json/yaml)")
     p_launch.add_argument("--api-key-file", help="Default API key file for backend (env: AIFW_API_KEY_FILE)")
     p_launch.add_argument("--port", type=int, default=8844)
+    p_launch.add_argument("--http-api-key", help="HTTP API key for backend auth (env: AIFW_HTTP_API_KEY)")
     p_launch.add_argument("--work-dir", help="Base dir for config/logs/pid (default ~/.aifw or $AIFW_WORK_DIR)")
     p_launch.add_argument("--state-dir", help="[deprecated] Same as --work-dir")
     p_launch.add_argument("--log-dest", choices=["stdout","file"], default="file")
@@ -768,6 +788,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_http.add_argument("--config", help="Path to aifw config file (json/yaml)")
     p_http.add_argument("--api-key-file", help="Key file path passed to backend (optional)")
     p_http.add_argument("--temperature", type=float)
+    p_http.add_argument("--http-api-key", help="HTTP API key for Authorization header (env: AIFW_HTTP_API_KEY)")
     p_http.set_defaults(func=cmd_http_call)
 
     # mask_restore: test mask_text and restore_text HTTP APIs
@@ -777,6 +798,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mr.add_argument("--config", help="Path to aifw config file (json/yaml)")
     p_mr.add_argument("--port", type=int, default=8844)
     p_mr.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")
+    p_mr.add_argument("--http-api-key", help="HTTP API key for Authorization header (env: AIFW_HTTP_API_KEY)")
     p_mr.set_defaults(func=cmd_mask_restore)
 
     # mask_restore_batch
@@ -786,6 +808,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mrb.add_argument("--config", help="Path to aifw config file (json/yaml)")
     p_mrb.add_argument("--port", type=int, default=8844)
     p_mrb.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")
+    p_mrb.add_argument("--http-api-key", help="HTTP API key for Authorization header (env: AIFW_HTTP_API_KEY)")
     p_mrb.set_defaults(func=cmd_mask_restore_batch)
 
     # multi_mask_one_restore
@@ -795,6 +818,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mmr.add_argument("--config", help="Path to aifw config file (json/yaml)")
     p_mmr.add_argument("--port", type=int, default=8844)
     p_mmr.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")
+    p_mmr.add_argument("--http-api-key", help="HTTP API key for Authorization header (env: AIFW_HTTP_API_KEY)")
     p_mmr.set_defaults(func=cmd_multi_mask_one_restore)
 
     return parser

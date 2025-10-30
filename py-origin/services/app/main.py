@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="OneAIFW Service", version="0.2.0")
 
 api = OneAIFWAPI()
-API_KEY = None  # set via env if desired
+# HTTP API key for Authorization header; can be set via env AIFW_HTTP_API_KEY
+API_KEY = os.environ.get("AIFW_HTTP_API_KEY") or None
 
 
 class CallIn(BaseModel):
@@ -32,12 +33,23 @@ class RestoreIn(BaseModel):
 	maskMeta: str
 
 
-def check_api_key(x_api_key: Optional[str] = Header(None)):
-	if API_KEY is None:
-		return True
-	if x_api_key != API_KEY:
-		raise HTTPException(status_code=401, detail="Unauthorized")
-	return True
+def parse_auth_header(auth: Optional[str]) -> Optional[str]:
+    if not auth:
+        return None
+    s = auth.strip()
+    if s.lower().startswith("bearer "):
+        return s[7:].strip()
+    return s
+
+
+def check_api_key(authorization: Optional[str] = Header(None)):
+    if not API_KEY:
+        return True
+    token = parse_auth_header(authorization)
+    if token != API_KEY:
+        logger.error(f"check_api_key: authorization: {authorization}, token: {token}, API_KEY: {API_KEY}, unauthorized error")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
 
 
 @app.get("/api/health")
@@ -46,8 +58,8 @@ async def health():
 
 
 @app.post("/api/call")
-async def api_call(inp: CallIn, x_api_key: Optional[str] = Header(None)):
-	check_api_key(x_api_key)
+async def api_call(inp: CallIn, authorization: Optional[str] = Header(None)):
+	check_api_key(authorization)
 	default_key_file = os.environ.get("AIFW_API_KEY_FILE")
 	chosen_key_file = inp.apiKeyFile or default_key_file
 	# Server-side monthly log cleanup based on env config
@@ -71,8 +83,8 @@ async def api_call(inp: CallIn, x_api_key: Optional[str] = Header(None)):
 
 
 @app.post("/api/mask_text")
-async def api_mask_text(inp: MaskIn, x_api_key: Optional[str] = Header(None)):
-	check_api_key(x_api_key)
+async def api_mask_text(inp: MaskIn, authorization: Optional[str] = Header(None)):
+	check_api_key(authorization)
 	try:
 		res = api.mask_text(text=inp.text, language=inp.language)
 		return {"output": {"text": res["text"], "maskMeta": res["maskMeta"]}, "error": None}
@@ -82,8 +94,8 @@ async def api_mask_text(inp: MaskIn, x_api_key: Optional[str] = Header(None)):
 
 
 @app.post("/api/restore_text")
-async def api_restore_text(inp: RestoreIn, x_api_key: Optional[str] = Header(None)):
-	check_api_key(x_api_key)
+async def api_restore_text(inp: RestoreIn, authorization: Optional[str] = Header(None)):
+	check_api_key(authorization)
 	try:
 		restored = api.restore_text(text=inp.text, mask_meta=inp.maskMeta)
 		return {"output": {"text": restored}, "error": None}
@@ -93,8 +105,8 @@ async def api_restore_text(inp: RestoreIn, x_api_key: Optional[str] = Header(Non
 
 
 @app.post("/api/mask_text_batch")
-async def api_mask_text_batch(inp_array: List[MaskIn], x_api_key: Optional[str] = Header(None)):
-	check_api_key(x_api_key)
+async def api_mask_text_batch(inp_array: List[MaskIn], authorization: Optional[str] = Header(None)):
+	check_api_key(authorization)
 	try:
 		res_array = []
 		for inp in inp_array:
@@ -106,8 +118,8 @@ async def api_mask_text_batch(inp_array: List[MaskIn], x_api_key: Optional[str] 
 
 
 @app.post("/api/restore_text_batch")
-async def api_restore_text_batch(inp_array: List[RestoreIn], x_api_key: Optional[str] = Header(None)):
-	check_api_key(x_api_key)
+async def api_restore_text_batch(inp_array: List[RestoreIn], authorization: Optional[str] = Header(None)):
+	check_api_key(authorization)
 	try:
 		restored_array = []
 		for inp in inp_array:

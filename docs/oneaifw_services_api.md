@@ -4,12 +4,12 @@ This document describes the HTTP API of the local OneAIFW backend service.
 
 Default base URL: `http://127.0.0.1:8844`
 
-Optional auth: request header `X-API-Key` (effective only if the server enables API_KEY).
+Optional auth: request header `Authorization` (effective only if the server enables API_KEY), value can be `<key>` or `Bearer <key>`.
 
 ### General Notes
 - Character encoding: UTF-8
 - Error responses:
-  - 401 Unauthorized: missing or invalid `X-API-Key`
+  - 401 Unauthorized: missing or invalid `Authorization`
   - 400 Bad Request: invalid request body
 
 ## Health Check
@@ -32,6 +32,7 @@ response:
 ## LLM Call (Anonymize → LLM → Restore)
 - Method/Path: POST `/api/call`
 - Content-Type: `application/json`
+- Headers: `Authorization: <your-key>` (when the server requires auth)
 - Request fields:
   - `text` (string, required): input text
   - `apiKeyFile` (string, optional): path to the LLM API config file read by the backend; if omitted, environment variable `AIFW_API_KEY_FILE` is used
@@ -46,7 +47,7 @@ Example (curl):
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/call \
   -H 'Content-Type: application/json' \
-  # -H 'X-API-Key: <your-key>' \
+  # -H 'Authorization: Bearer <your-key>' \
   -d '{"text":"请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."}'
 ```
 response:
@@ -63,6 +64,7 @@ Important: paired mask and restore calls must use the same `maskMeta`. `maskMeta
 ### Mask interface (produce masked text and maskMeta)
 - Method/Path: POST `/api/mask_text`
 - Request Content-Type: `application/json`
+- Headers: `Authorization: <your-key>` (when the server requires auth)
 - Request fields:
   - `text` (string, required): input text
   - `language` (string, optional): language hint (e.g., `en`, `zh`); if omitted, the server auto-detects
@@ -82,7 +84,7 @@ Example (curl):
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/mask_text \
   -H 'Content-Type: application/json' \
-  # -H 'X-API-Key: <your-key>' \
+  # -H 'Authorization: Bearer <your-key>' \
   -d '{"text":"My email address is test@example.com, and my phone number is 18744325579.","language":"en"}'
 ```
 response:
@@ -99,6 +101,7 @@ response:
 ### Restore interface (consume masked text and maskMeta to produce restored text)
 - Method/Path: POST `/api/restore_text`
 - Request Content-Type: `application/json`
+- Headers: `Authorization: <your-key>` (when the server requires auth)
 - Request body:
 ```json
 {
@@ -119,7 +122,7 @@ Example (curl):
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/restore_text \
   -H 'Content-Type: application/json' \
-  # -H 'X-API-Key: <your-key>' \
+  # -H 'Authorization: Bearer <your-key>' \
   -d '{"text":"My email address is __PII_EMAIL_ADDRESS_00000001__, and my phone number is __PII_PHONE_NUMBER_00000002__.", "maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDJfXyI6ICIxODc0NDMyNTU3OSIsICJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"}'
 ```
 response:
@@ -183,6 +186,7 @@ console.log('restored:', (restoredObj.output || {}).text);
 ### mask_text_batch
 - Method/Path: POST `/api/mask_text_batch`
 - Request Content-Type: `application/json`
+- Headers: `Authorization: <your-key>` (when the server requires auth)
 - Request body: JSON array of objects `{ text, language? }`
 - Response Content-Type: `application/json`
 - Response body:
@@ -200,7 +204,7 @@ Example (curl):
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/mask_text_batch \
   -H 'Content-Type: application/json' \
-  # -H 'X-API-Key: <your-key>' \
+  # -H 'Authorization: Bearer <your-key>' \
   -d '[{"text":"My email address is test@example.com"}, {"text":"and my phone number is 18744325579.","language":"en"}]'
 ```
 response:
@@ -219,6 +223,7 @@ response:
 ### restore_text_batch
 - Method/Path: POST `/api/restore_text_batch`
 - Request Content-Type: `application/json`
+- Headers: `Authorization: <your-key>` (when the server requires auth)
 - Request body: JSON array of objects `{ text, maskMeta }` (maskMeta is base64 string)
 - Response Content-Type: `application/json`
 - Response body:
@@ -236,21 +241,18 @@ Example (curl):
 ```bash
 curl -s -X POST http://127.0.0.1:8844/api/restore_text_batch \
   -H 'Content-Type: application/json' \
-  # -H 'X-API-Key: <your-key>' \
+  # -H 'Authorization: Bearer <your-key>' \
   -d '[{"text":"My email address is __PII_EMAIL_ADDRESS_00000001__","maskMeta":"eyJfX1BJSV9FTUFJTF9BRERSRVNTXzAwMDAwMDAxX18iOiAidGVzdEBleGFtcGxlLmNvbSJ9"},{"text":"and my phone number is __PII_PHONE_NUMBER_00000001__.","maskMeta":"eyJfX1BJSV9QSE9ORV9OVU1CRVJfMDAwMDAwMDFfXyI6ICIxODc0NDMyNTU3OSJ9"}]'
 ```
 response:
 ```json
 {
-  "output":[
-    {"text":"My email address is test@example.com"},
-    {"text":"and my phone number is 18744325579."}
-  ],
+  "output":["My email address is test@example.com","and my phone number is 18744325579."],
   "error":null
 }
 ```
 
 ## Notes
 - On the server side, `maskMeta` is the UTF-8 JSON serialization of `placeholdersMap`. Clients do not need to understand its structure—just pass it back to `/api/restore_text` as-is.
-- If auth is enabled, include `X-API-Key` in requests.
+- If auth is enabled, include `Authorization` header in requests (value can be `<key>` or `Bearer <key>`).
 
