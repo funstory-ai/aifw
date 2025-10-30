@@ -45,12 +45,12 @@ export class TokenClassificationPipeline {
     this.processor = processor;
   }
 
-  async run(text, { ignore_labels = ['O'] } = {}) {
+  async run(text, { ignore_labels = ['O'], offsetText, tokenTransform } = {}) {
     const enc = this.tokenizer([text], { padding: true, truncation: true, add_special_tokens: true });
     const idsRow = enc.input_ids[0];
     const seqLen = idsRow.dims[0];
 
-    const tokensPlain = [];
+    let tokensPlain = [];
     const seqIndexToPlainIndex = new Array(seqLen).fill(-1);
     for (let j = 0; j < seqLen; j++) {
       const id = idsRow[j].item();
@@ -62,7 +62,14 @@ export class TokenClassificationPipeline {
       }
     }
 
-    const offsets = computeOffsetsFromTokens(text, tokensPlain);
+    if (typeof tokenTransform === 'function') {
+      const transformed = new Array(tokensPlain.length);
+      for (let i = 0; i < tokensPlain.length; i++) transformed[i] = tokenTransform(tokensPlain[i]) || tokensPlain[i];
+      tokensPlain = transformed;
+    }
+
+    const baseTextForOffsets = typeof offsetText === 'string' ? offsetText : text;
+    const offsets = computeOffsetsFromTokens(baseTextForOffsets, tokensPlain);
     const outputs = await this.model(enc);
     const logits = outputs.logits;
     const dims = logits.dims || [];

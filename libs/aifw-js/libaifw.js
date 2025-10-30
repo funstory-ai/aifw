@@ -6,6 +6,33 @@ let nerPipelines = {
   zh: null,
 };
 
+// Lazy OpenCC converters (Simplified <-> Traditional)
+let openccConverters = { s2t: null, t2s: null };
+async function ensureOpenCC() {
+  if (openccConverters.s2t && openccConverters.t2s) return openccConverters;
+  try {
+    const mod = await import('opencc-js');
+    const OpenCC = mod?.default || mod;
+    const s2t = await OpenCC.Converter({ from: 'cn', to: 'tw' });
+    const t2s = await OpenCC.Converter({ from: 'tw', to: 'cn' });
+    openccConverters = { s2t, t2s };
+  } catch (e) {
+    console.warn('[aifw] opencc-js not available, fallback to identity conversion', e);
+    openccConverters = { s2t: (s) => s, t2s: (s) => s };
+  }
+  return openccConverters;
+}
+
+function isZhSimplified(language) {
+  const lang = String(language || '').toLowerCase();
+  if (lang === 'zh') return true; // default to simplified
+  if (!lang.startsWith('zh-')) return false;
+  if (lang.includes('hant')) return false;
+  if (lang.includes('tw')) return false;
+  if (lang.includes('hk')) return false;
+  return true;
+}
+
 // Helpers
 export class MatchedPIISpan {
   constructor(entity_id, entity_type, matched_start, matched_end) {
@@ -160,7 +187,14 @@ export async function maskText(inputText, language) {
   let outMaskMetaPtrPtr = 0;
   try {
     zigInputText = allocZigStrFromJs(inputText);
-    const items = await nerPipe.run(inputText);
+    let runText = inputText;
+    let runOpts = undefined;
+    if (nerPipe === nerPipelines.zh && isZhSimplified(language)) {
+      const { s2t, t2s } = await ensureOpenCC();
+      runText = s2t(inputText);
+      runOpts = { offsetText: inputText, tokenTransform: t2s };
+    }
+    const items = await nerPipe.run(runText, runOpts);
     nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText);
 
     outMaskedPtrPtr = wasm.aifw_malloc(4);
@@ -252,7 +286,14 @@ export async function getPiiSpans(inputText, language) {
   let outCountPtr = 0;
   try {
     zigInputText = allocZigStrFromJs(inputText);
-    const items = await nerPipe.run(inputText);
+    let runText = inputText;
+    let runOpts = undefined;
+    if (nerPipe === nerPipelines.zh && isZhSimplified(language)) {
+      const { s2t, t2s } = await ensureOpenCC();
+      runText = s2t(inputText);
+      runOpts = { offsetText: inputText, tokenTransform: t2s };
+    }
+    const items = await nerPipe.run(runText, runOpts);
     nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText);
 
     outSpansPtrPtr = wasm.aifw_malloc(4);
