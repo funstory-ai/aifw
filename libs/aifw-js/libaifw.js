@@ -8,6 +8,42 @@ let nerPipelines = {
 
 // Lazy OpenCC converters (Simplified <-> Traditional)
 let openccConverters = { s2t: null, t2s: null };
+// Small LRU caches for conversions to avoid repeated s2t/t2s on same text
+const OPENCC_CACHE_LIMIT = 32;
+const openccCache = { s2t: new Map(), t2s: new Map() };
+function cacheGet(map, key) { return map.get(key); }
+function cacheSet(map, key, val) {
+  if (map.size >= OPENCC_CACHE_LIMIT && !map.has(key)) {
+    // delete the first inserted key
+    const it = map.keys().next();
+    if (!it.done) map.delete(it.value);
+  }
+  map.set(key, val);
+}
+async function s2tCached(text) {
+  const hit = cacheGet(openccCache.s2t, text);
+  if (hit !== undefined) return hit;
+  const { s2t } = await ensureOpenCC();
+  const out = s2t(text);
+  cacheSet(openccCache.s2t, text, out);
+  return out;
+}
+async function t2sCached(text) {
+  const hit = cacheGet(openccCache.t2s, text);
+  if (hit !== undefined) return hit;
+  const { t2s } = await ensureOpenCC();
+  const out = t2s(text);
+  cacheSet(openccCache.t2s, text, out);
+  return out;
+}
+function t2sCachedSync(text) { // best-effort if ensureOpenCC already loaded
+  if (!openccConverters.t2s) return text;
+  const hit = cacheGet(openccCache.t2s, text);
+  if (hit !== undefined) return hit;
+  const out = openccConverters.t2s(text);
+  cacheSet(openccCache.t2s, text, out);
+  return out;
+}
 async function ensureOpenCC() {
   if (openccConverters.s2t && openccConverters.t2s) return openccConverters;
   try {
@@ -25,12 +61,99 @@ async function ensureOpenCC() {
 
 function isZhSimplified(language) {
   const lang = String(language || '').toLowerCase();
-  if (lang === 'zh') return true; // default to simplified
+  if (lang === 'zh') return true; // legacy -> treat as zh-cn
+  if (lang === 'zh-cn') return true;
   if (!lang.startsWith('zh-')) return false;
   if (lang.includes('hant')) return false;
   if (lang.includes('tw')) return false;
   if (lang.includes('hk')) return false;
   return true;
+}
+
+// -------- Language detection (heuristic-first, OpenCC on-demand) --------
+function ratioOfHan(text) {
+  if (!text) return 0;
+  let han = 0, total = 0;
+  for (let i = 0; i < text.length;) {
+    const cp = text.codePointAt(i);
+    const cu = cp > 0xFFFF ? 2 : 1;
+    total += 1;
+    // Basic CJK + Extension A + Compatibility Ideographs
+    if ((cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0xF900 && cp <= 0xFAFF)) han += 1;
+    i += cu;
+  }
+  return total ? han / total : 0;
+}
+function ratioOfLatin(text) {
+  if (!text) return 0;
+  let lat = 0, total = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    total += 1;
+    if ((ch >= 0x41 && ch <= 0x5A) || (ch >= 0x61 && ch <= 0x7A)) lat += 1;
+  }
+  return total ? lat / total : 0;
+}
+function quickLang(text) {
+  const han = ratioOfHan(text);
+  const lat = ratioOfLatin(text);
+  // The threshold 0.3 for han and 0.5 for lat can be finetuned based on specific use cases.
+  if (han >= 0.3) return 'zh';
+  if (lat >= 0.5) return 'en';
+  return 'other';
+}
+// Expanded heuristics: simplified/traditional unique chars and words
+const SIMPLIFIED_ONLY = new Set([
+  '后','发','台','里','复','面','余','划','钟','观','厂','广','圆','国','东','乐','云','内','两',
+  '丢','为','价','众','优','冲','况','刘','师','于','亏','仅','从','兴','举','义','乌','专'
+]);
+const TRADITIONAL_ONLY = new Set([
+  '後','發','臺','裡','複','麵','餘','劃','鐘','觀','廠','廣','圓','國','東','樂','雲','內','兩',
+  '丟','為','價','眾','優','衝','況','劉','師','於','虧','僅','從','興','舉','義','烏','專'
+]);
+const SIMPLIFIED_WORDS = ['开发','软件','后端','互联网','应用','运维','里程','联系','台阶','复用'];
+const TRADITIONAL_WORDS = ['開發','軟體','後端','網際網路','應用','運維','聯繫','臺階','複用'];
+function scoreBySets(text) {
+  let sScore = 0, tScore = 0;
+  for (const ch of text) {
+    if (SIMPLIFIED_ONLY.has(ch)) sScore++;
+    if (TRADITIONAL_ONLY.has(ch)) tScore++;
+  }
+  for (const w of SIMPLIFIED_WORDS) if (text.includes(w)) sScore += 2;
+  for (const w of TRADITIONAL_WORDS) if (text.includes(w)) tScore += 2;
+  return { sScore, tScore };
+}
+function quickScriptZh(text) {
+  const { sScore, tScore } = scoreBySets(text);
+  if (sScore - tScore >= 2) return 'Hans';
+  if (tScore - sScore >= 2) return 'Hant';
+  return null;
+}
+function diffRatio(a, b) {
+  if (a === b) return 0;
+  const n = Math.min(a.length, b.length);
+  let diff = Math.abs(a.length - b.length);
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) diff++;
+  return n ? diff / Math.max(a.length, b.length) : 1;
+}
+async function decideScriptWithOpenCC(text) {
+  const toT = await s2tCached(text);
+  const toS = await t2sCached(text);
+  const sChanged = toT !== text;
+  const tChanged = toS !== text;
+  if (sChanged && !tChanged) return 'Hans';
+  if (!sChanged && tChanged) return 'Hant';
+  const diffS = diffRatio(text, toS);
+  const diffT = diffRatio(text, toT);
+  return diffS <= diffT ? 'Hans' : 'Hant';
+}
+export async function detectLanguage(text) {
+  const lang = quickLang(text || '');
+  if (lang !== 'zh') return { lang, script: null, confidence: lang === 'en' ? 0.9 : 0.6, method: 'heuristic' };
+  const scriptQuick = quickScriptZh(text || '');
+  if (scriptQuick) return { lang: 'zh', script: scriptQuick, confidence: 0.8, method: 'heuristic' };
+  const script = await decideScriptWithOpenCC(text || '');
+  return { lang: 'zh', script, confidence: 0.95, method: 'opencc' };
 }
 
 // Helpers
@@ -178,7 +301,12 @@ function selectNer(language) {
 
 export async function maskText(inputText, language) {
   if (!wasm || !session?.handle) throw new Error('invalid session handle');
-  const nerPipe = selectNer(language);
+  let langToUse = language;
+  if (langToUse == null || langToUse === '' || langToUse === 'auto') {
+    const det = await detectLanguage(inputText || '');
+    if (det.lang === 'zh') langToUse = det.script === 'Hant' ? 'zh-TW' : 'zh-CN'; else langToUse = det.lang || 'en';
+  }
+  const nerPipe = selectNer(langToUse);
   if (!nerPipe) throw new Error('NER pipeline not ready');
 
   let zigInputText = null;
@@ -189,10 +317,11 @@ export async function maskText(inputText, language) {
     zigInputText = allocZigStrFromJs(inputText);
     let runText = inputText;
     let runOpts = undefined;
-    if (nerPipe === nerPipelines.zh && isZhSimplified(language)) {
-      const { s2t, t2s } = await ensureOpenCC();
-      runText = s2t(inputText);
-      runOpts = { offsetText: inputText, tokenTransform: t2s };
+    if (nerPipe === nerPipelines.zh && isZhSimplified(langToUse)) {
+      runText = await s2tCached(inputText);
+      // Bind cached t2s for token transform (sync if already loaded)
+      const tokenT2S = (s) => t2sCachedSync(s);
+      runOpts = { offsetText: inputText, tokenTransform: tokenT2S };
     }
     const items = await nerPipe.run(runText, runOpts);
     nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText);
@@ -256,9 +385,11 @@ export async function restoreText(maskedText, maskMeta) {
 // Batch mask: inputs can be array of strings or { text, language }
 export async function maskTextBatch(textAndLanguageArray) {
   if (!Array.isArray(textAndLanguageArray)) throw new Error('maskTextBatch: textAndLanguageArray must be an array');
-  const tasks = textAndLanguageArray.map((it) => {
+  const tasks = textAndLanguageArray.map(async (it) => {
+    if (typeof it === 'string') return maskText(String(it || ''), null);
     const { text, language } = it || {};
-    return maskText(String(text || ''), language);
+    const lang = (language == null || language === '' || language === 'auto') ? null : language;
+    return maskText(String(text || ''), lang);
   });
   const results = await Promise.all(tasks);
   return results.map(([masked, maskMeta]) => ({ text: masked, maskMeta }));
@@ -277,7 +408,12 @@ export async function restoreTextBatch(textAndMaskMetaArray) {
 
 export async function getPiiSpans(inputText, language) {
   if (!wasm || !session?.handle) throw new Error('invalid session handle');
-  const nerPipe = selectNer(language);
+  let langToUse = language;
+  if (langToUse == null || langToUse === '' || langToUse === 'auto') {
+    const det = await detectLanguage(inputText || '');
+    if (det.lang === 'zh') langToUse = det.script === 'Hant' ? 'zh-TW' : 'zh-CN'; else langToUse = det.lang || 'en';
+  }
+  const nerPipe = selectNer(langToUse);
   if (!nerPipe) throw new Error('NER pipeline not ready');
 
   let zigInputText = null;
@@ -288,10 +424,10 @@ export async function getPiiSpans(inputText, language) {
     zigInputText = allocZigStrFromJs(inputText);
     let runText = inputText;
     let runOpts = undefined;
-    if (nerPipe === nerPipelines.zh && isZhSimplified(language)) {
-      const { s2t, t2s } = await ensureOpenCC();
-      runText = s2t(inputText);
-      runOpts = { offsetText: inputText, tokenTransform: t2s };
+    if (nerPipe === nerPipelines.zh && isZhSimplified(langToUse)) {
+      runText = await s2tCached(inputText);
+      const tokenT2S = (s) => t2sCachedSync(s);
+      runOpts = { offsetText: inputText, tokenTransform: tokenT2S };
     }
     const items = await nerPipe.run(runText, runOpts);
     nerBuf = nerLib.buildNerEntitiesBuffer(wasm, items, inputText);

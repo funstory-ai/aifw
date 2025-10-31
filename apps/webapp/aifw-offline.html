@@ -19,10 +19,12 @@
     <div class="row">
       <label for="lang">Language</label>
       <select id="lang">
-        <option value="zh">Chinese (Simplified)</option>
+        <option value="auto" selected>Auto (detect)</option>
+        <option value="zh-CN">Chinese (Simplified)</option>
         <option value="zh-TW">Chinese (Traditional)</option>
-        <option value="en" selected>English</option>
+        <option value="en">English</option>
       </select>
+      <span id="lang-detected" style="margin-left: 8px;"></span>
     </div>
     <div class="row">
       <label><input type="checkbox" id="use-batch" /> Use batch (maskTextBatch)</label>
@@ -73,10 +75,20 @@
 
             const textStr = textEl.value || '';
             const lines = textStr.split(/\r?\n/);
-            const language = (document.getElementById('lang')?.value) || 'en';
+            let language = (document.getElementById('lang')?.value) || 'auto';
             const useBatch = !!document.getElementById('use-batch')?.checked;
             let maskedLines = [];
             let metas = [];
+            // detect for display; library will auto-detect when language is null/auto
+            if (language === 'auto') {
+              try {
+                const det = await aifw.detectLanguage(textStr);
+                const show = det && det.lang === 'zh' ? (det.script === 'Hant' ? 'zh-TW' : 'zh-CN') : (det && det.lang) || '';
+                const span = document.getElementById('lang-detected');
+                if (span) span.textContent = show ? `(detected: ${show})` : '';
+              } catch (e) {}
+              language = null;
+            }
             if (useBatch) {
               const inputs = lines.map((line) => ({ text: line, language }));
               const results = await aifw.maskTextBatch(inputs);

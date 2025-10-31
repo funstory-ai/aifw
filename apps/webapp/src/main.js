@@ -15,7 +15,8 @@ if (!langEl && textEl && textEl.parentElement) {
   select.id = 'lang';
   // Supported: Simplified Chinese, Traditional Chinese, English
   const opts = [
-    { v: 'zh', t: 'Chinese (Simplified)' },
+    { v: 'auto', t: 'Auto (detect)' },
+    { v: 'zh-CN', t: 'Chinese (Simplified)' },
     { v: 'zh-TW', t: 'Chinese (Traditional)' },
     { v: 'en', t: 'English' },
   ];
@@ -23,10 +24,15 @@ if (!langEl && textEl && textEl.parentElement) {
     const o = document.createElement('option');
     o.value = v; o.textContent = t; select.appendChild(o);
   }
-  // default to English
-  select.value = 'en';
+  // default to Auto
+  select.value = 'auto';
   row.appendChild(label);
   row.appendChild(select);
+  // detected language indicator
+  const detSpan = document.createElement('span');
+  detSpan.id = 'lang-detected';
+  detSpan.style.marginLeft = '8px';
+  row.appendChild(detSpan);
   // insert before the textarea row
   textEl.parentElement.parentElement?.insertBefore(row, textEl.parentElement);
   langEl = select;
@@ -73,11 +79,22 @@ async function main() {
       restoredEl.textContent = '';
 
       const textStr = textEl.value || '';
-      const language = (langEl && langEl.value) || 'en';
+      let language = (langEl && langEl.value) || 'auto';
       const lines = textStr.split(/\r?\n/);
       const useBatch = !!(batchEl && batchEl.checked);
       let maskedLines = [];
       let metas = [];
+      // detect language if auto (for display only). Library will also auto-detect per text when language is null/auto
+      let displayLang = '';
+      if (language === 'auto') {
+        try {
+          const det = await aifw.detectLanguage(textStr);
+          if (det.lang === 'zh') displayLang = det.script === 'Hant' ? 'zh-TW' : 'zh-CN'; else displayLang = det.lang || 'en';
+        } catch (_) {}
+        const span = document.getElementById('lang-detected');
+        if (span) span.textContent = displayLang ? `(detected: ${displayLang})` : '';
+        language = null; // pass null to trigger library auto-detect
+      }
       if (useBatch) {
         const inputs = lines.map((line) => ({ text: line, language }));
         const results = await aifw.maskTextBatch(inputs);
