@@ -327,6 +327,10 @@ pub const MaskPipeline = struct {
         self.allocator.free(self.regex_list);
     }
 
+    fn isSpanOverlapping(a: RecogEntity, b: RecogEntity) bool {
+        return !(a.end <= b.start or b.end <= a.start);
+    }
+
     pub fn run(self: *const MaskPipeline, args: MaskArgs) !PipelineResult {
         const original_text = std.mem.span(args.original_text);
         std.log.debug("[mask] ner ents from ner_data: {any}", .{args.ner_data});
@@ -375,9 +379,14 @@ pub const MaskPipeline = struct {
                 }
             }
         }
-        const final_spans = try filtered.toOwnedSlice(self.allocator);
+        const filtered_spans = try filtered.toOwnedSlice(self.allocator);
+        defer self.allocator.free(filtered_spans);
+        std.log.debug("[mask] filtered spans: {d}", .{filtered_spans.len});
+
+        // 4.1) De-duplicate overlapping spans by priority (higher score, longer span, earlier start)
+        const final_spans = try dedupOverlappingSpans(self.allocator, filtered_spans);
         defer self.allocator.free(final_spans);
-        std.log.debug("[mask] final spans: {d}", .{final_spans.len});
+        std.log.debug("[mask] final spans after dedup: {d}", .{final_spans.len});
 
         // 5) Anonymizer: build masked text with placeholders
         var out_buf = try std.ArrayList(u8).initCapacity(self.allocator, original_text.len);
@@ -427,6 +436,51 @@ pub const MaskPipeline = struct {
         };
     }
 };
+
+fn dedupOverlappingSpans(allocator: std.mem.Allocator, spans: []const RecogEntity) ![]RecogEntity {
+    if (spans.len == 0) return allocator.alloc(RecogEntity, 0);
+
+    // copy spans for sorting by priority: higher score, longer length, earlier start
+    const work = try allocator.dupe(RecogEntity, spans);
+    errdefer allocator.free(work);
+    std.sort.block(RecogEntity, work, {}, struct {
+        fn lessThan(_: void, a: RecogEntity, b: RecogEntity) bool {
+            if (a.score != b.score) return a.score > b.score; // higher first
+            const a_len = a.end - a.start;
+            const b_len = b.end - b.start;
+            if (a_len != b_len) return a_len > b_len; // longer first
+            return a.start < b.start; // earlier first
+        }
+    }.lessThan);
+
+    var selected = try std.ArrayList(RecogEntity).initCapacity(allocator, work.len);
+    errdefer selected.deinit(allocator);
+    const overlaps = struct {
+        fn f(a: RecogEntity, b: RecogEntity) bool {
+            return !(a.end <= b.start or b.end <= a.start);
+        }
+    };
+    for (work) |cand| {
+        var ok = true;
+        for (selected.items) |s| {
+            if (overlaps.f(cand, s)) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) try selected.append(allocator, cand);
+    }
+    allocator.free(work);
+
+    // Sort back to start order for downstream placeholder building
+    std.sort.block(RecogEntity, selected.items, {}, struct {
+        fn lessThan(_: void, a: RecogEntity, b: RecogEntity) bool {
+            return if (a.start == b.start) a.end < b.end else a.start < b.start;
+        }
+    }.lessThan);
+
+    return selected.toOwnedSlice(allocator);
+}
 
 pub const RestorePipeline = struct {
     allocator: std.mem.Allocator,
