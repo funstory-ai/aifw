@@ -32,6 +32,22 @@ if (!langEl && textEl && textEl.parentElement) {
   langEl = select;
 }
 
+// Create batch mode toggle above textarea
+let batchEl = document.getElementById('use-batch');
+if (!batchEl && textEl && textEl.parentElement) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  const label = document.createElement('label');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.id = 'use-batch';
+  label.appendChild(input);
+  label.appendChild(document.createTextNode(' Use batch (maskTextBatch)'));
+  row.appendChild(label);
+  textEl.parentElement.parentElement?.insertBefore(row, textEl.parentElement);
+  batchEl = input;
+}
+
 let aifw; // wrapper lib
 
 async function main() {
@@ -59,12 +75,20 @@ async function main() {
       const textStr = textEl.value || '';
       const language = (langEl && langEl.value) || 'en';
       const lines = textStr.split(/\r?\n/);
-      const maskedLines = [];
-      const metas = [];
-      for (const line of lines) {
-        const [masked, meta] = await aifw.maskText(line, language);
-        maskedLines.push(masked);
-        metas.push(meta);
+      const useBatch = !!(batchEl && batchEl.checked);
+      let maskedLines = [];
+      let metas = [];
+      if (useBatch) {
+        const inputs = lines.map((line) => ({ text: line, language }));
+        const results = await aifw.maskTextBatch(inputs);
+        maskedLines = results.map((r) => (r && r.text) || '');
+        metas = results.map((r) => r && r.maskMeta);
+      } else {
+        for (const line of lines) {
+          const [masked, meta] = await aifw.maskText(line, language);
+          maskedLines.push(masked);
+          metas.push(meta);
+        }
       }
       const maskedStr = maskedLines.join('\n');
       maskedEl.textContent = maskedStr;

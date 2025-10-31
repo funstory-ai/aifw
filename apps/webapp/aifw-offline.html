@@ -25,6 +25,9 @@
       </select>
     </div>
     <div class="row">
+      <label><input type="checkbox" id="use-batch" /> Use batch (maskTextBatch)</label>
+    </div>
+    <div class="row">
       <label for="text">Input text</label>
       <textarea id="text" placeholder="Type text with PII here..."></textarea>
     </div>
@@ -71,12 +74,20 @@
             const textStr = textEl.value || '';
             const lines = textStr.split(/\r?\n/);
             const language = (document.getElementById('lang')?.value) || 'en';
-            const maskedLines = [];
-            const metas = [];
-            for (const line of lines) {
-              const [masked, meta] = await aifw.maskText(line, language);
-              maskedLines.push(masked);
-              metas.push(meta);
+            const useBatch = !!document.getElementById('use-batch')?.checked;
+            let maskedLines = [];
+            let metas = [];
+            if (useBatch) {
+              const inputs = lines.map((line) => ({ text: line, language }));
+              const results = await aifw.maskTextBatch(inputs);
+              maskedLines = results.map((r) => (r && r.text) || '');
+              metas = results.map((r) => r && r.maskMeta);
+            } else {
+              for (const line of lines) {
+                const [masked, meta] = await aifw.maskText(line, language);
+                maskedLines.push(masked);
+                metas.push(meta);
+              }
             }
             const maskedStr = maskedLines.join('\n');
             maskedEl.textContent = maskedStr;
