@@ -1,91 +1,116 @@
 OneAIFW
 ===
 
-OneAIFW is a local and lightweight firewall can protect users leak their privacy or secret when calling outside LLM API.
+OneAIFW is a local, lightweight “AI firewall” that anonymizes sensitive data before sending it to LLMs, and restores it after responses.
 
-OneAIFW works like a transparent proxy between caller and callee.
+- Core engine: Zig + Rust (WASM and native)
+- Frontend library: `@oneaifw/aifw-js` (Transformers.js + our WASM)
+- Demos: Web app, Browser Extension
+- Backend service based on presidio/LiteLLM: `py-origin` (FastAPI + Presidio/LiteLLM)
 
+## What we protect for you
+
+Privacy:
+- Physical Address
+- Email Address
+- Name[optional]
+- Phone
+- Bank Account
+- Paymant Information
+
+Secrets:
+- Verification Code
+- Password 
+
+Crypto:
+- Seed
+- Private Key
+- Address
+
+## Monorepo layout
+
+- `core/` Zig core and pipelines (mask/restore)
+- `libs/aifw-js/` JavaScript library used in browser and demos
+- `apps/webapp/` Minimal browser demo (Vite)
+- `browser_extension/` Chrome/Edge extension sample
+- `py-origin/` Python backend service + CLI command (see its own README)
+- `tests/transformer-js/` Transformers.js demo and model prep scripts
+
+## Architecture
+
+High‑level architecture (overview):
+
+- aifw core library (Zig + Rust): provides the masking/restoring pipelines and regex/NER span fusion; builds to native and WASM for browser use.
+- aifw-js (`@oneaifw/aifw-js`): browser library that runs NER with Transformers.js, converts spans to byte offsets, calls the WASM core to mask/restore, and exposes a friendly API (including batch and language‑aware masking).
+- Backends and apps: `py-origin` HTTP service/CLI, `apps/webapp` demo, and `browser_extension`.
+
+## Prerequisites
+
+- Zig 0.15.1
+- Rust toolchain (stable) + Cargo
+  - `rustup target add wasm32-unknown-unknown`
+- Node.js 18+ and pnpm 9+
+  - Install pnpm: `npm i -g pnpm`
+- Python 3.10+ (for `py-origin` backend) and pip/venv
+
+Verify versions:
+
+```bash
+zig version           # expect 0.15.1
+rustc --version
+cargo --version
+node -v
+pnpm -v
+python3 --version
+```
 
 ## Getting Started
 OneAIFW lets you safely call external LLM providers by anonymizing sensitive data first, then restoring it after the model response. You can run it as a local HTTP service or use an in‑process CLI. Follow the steps below to get up and running quickly.
 
-### Clone and create venv
+### Quick start
+
 ```bash
 git clone https://github.com/funstory-ai/aifw.git
 cd aifw
-cd py-origin
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
 ```
 
-### Install dependencies
+1) Build the aifw core library (native + WASM):
+
 ```bash
-cd py-origin
-pip install -r services/requirements.txt
-pip install -r cli/requirements.txt
-python -m spacy download en_core_web_sm
-python -m spacy download zh_core_web_sm
-python -m spacy download xx_ent_wiki_sm
+# From repo root
+zig build
 ```
 
-### Prepare config and LLM API key file
-The default aifw.yaml is in assets directory, you can modify this file for yourself.
+2) Install JS workspace dependencies (pnpm workspace):
+
+```bash
+pnpm -w install
+```
+
+3) Build the JavaScript library aifw-js (bundles and stages WASM/models), this library has a complete pipeline for mask/restore text with transformers.js:
+
+```bash
+pnpm -w --filter @oneaifw/aifw-js build
+```
+
+4) Run the web demo:
+
+```bash
+cd apps/webapp
+pnpm dev
+# open the printed local URL
+```
+
+5) Backend service and CLI based on presidio (see `py-origin/README.md`):
 
 ```bash
 cd py-origin
-mkdir -p ~/.aifw
-cp assets/aifw.yaml ~/.aifw/aifw.yaml
-# edit ~/.aifw/aifw.yaml and set api_key_file to your LLM API key JSON
-```
-
-### Launch HTTP server
-If you want HTTP server API has a authorization, you should set environment variable
-AIFW_HTTP_API_KEY with bash command:
-```bash
-# The 8H234B can be replaced by your key
-export AIFW_HTTP_API_KEY=8H234B
-```
-
-The default output of logger is file
-```bash
-cd py-origin
+python -m venv .venv && source .venv/bin/activate
+pip install -r services/requirements.txt -r cli/requirements.txt
 python -m aifw launch
 ```
-You should see output like:
-```
-aifw is running at http://localhost:8844.
-logs: ~/.aifw/aifw_server-2025-08.log
-```
 
-### Call the HTTP service
-```bash
-cd py-origin
-python -m aifw call "请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
-```
-
-You can override the LLM API key file per call using `--api-key-file`:
-```bash
-cd py-origin
-python -m aifw call --api-key-file /path/to/api-keys/your-key.json "..."
-```
-
-### Stop the server
-```bash
-cd py-origin
-python -m aifw stop
-```
-
-### Direct in-process call (no HTTP)
-```bash
-cd py-origin
-python -m aifw direct_call "请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
-```
-
-You can also switch provider dynamically per call:
-```bash
-cd py-origin
-python -m aifw direct_call --api-key-file /path/to/api-keys/your-key.json "..."
-```
+The `py-origin` project is a standalone subproject. All of its development and usage documentation is now maintained in `py-origin/README.md`.
 
 ### Parameter precedence
 
@@ -103,92 +128,26 @@ For example, the LLM API key file is resolved as:
 
 The same precedence applies to port, logging options, etc.
 
-## zig build
+## Building the aifw core library with Zig
 
-We use Zig's build system as the single entrypoint to orchestrate the whole project: the Zig core library, Rust regex static libs, the browser JS app under `tests/transformer-js`, and the Python apps under `py-origin`. This gives us a reproducible, cross‑platform build with one command.
+We use Zig's build system to produce the native and WASM artifacts and to orchestrate Rust static libs.
 
-Feasibility: Zig's build runner can invoke arbitrary system commands (Cargo, Node/NPM, Python, etc.) via process steps, manage dependencies between them, and expose convenient targets. This pattern is already used in this repo to build the Rust regex libraries for both native and WASM. Extending it to JS and Python is straightforward and recommended.
+High‑level targets:
+- Core: `zig build` (default)
+- Unit tests: `zig build -Doptimize=Debug test`
+- Integration test exe: `zig build inttest` (run `zig-out/bin/aifw_core_test`)
 
-High‑level targets (conceptual):
-- Core: `zig build` builds Zig static libs and Rust `.a` (native + WASM)
-- Tests: `zig build test` (unit), `zig build inttest` (integration executable)
-- Web app: `zig build web` prepares models and builds `tests/transformer-js` with Vite
-- Web dev server: `zig build web-dev` runs Vite dev (long‑running)
-- Python: `zig build py-setup` prepares venv; `zig build py-wheel` builds a wheel; `zig build py-run` runs the app or service
-
-Notes:
-- The current `build.zig` already wires the core library, Rust regex (native/WASM), and tests. Adding `web`, `web-dev`, and Python targets is done by adding system command steps (NPM/Cargo/Python) and wiring dependencies.
-- Outputs can be:
-  - JS web app bundle (for standalone demo, or copied into a browser extension/package)
-  - Python wheel or runnable entrypoints (CLI and service)
-
-Environment variables honored during JS model preparation (when `zig build web` runs `tests/transformer-js/scripts/prep-models.mjs`):
+Environment variables during JS model preparation (used by `tests/transformer-js` tools):
 - `ALLOW_REMOTE=1` enables online model downloads
-- `HF_TOKEN`, `HF_ENDPOINT` provide Hugging Face auth/mirror
-- `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` control network proxying
+- `HF_TOKEN`, `HF_ENDPOINT` for Hugging Face
+- `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` for proxies
 
-Example end‑to‑end flows (once the targets are added):
+Examples:
 ```bash
-# Build everything (core + regex + planned web bundle)
 zig build
-
-# Unit tests for core
 zig build -Doptimize=Debug test
-
-# Integration test executable
 zig build inttest && zig-out/bin/aifw_core_test
-
-# Build the web demo (downloads/converts models, then vite build)
-ALLOW_REMOTE=1 HF_TOKEN=... zig build web
-
-# Prepare Python venv and build a wheel
-zig build py-setup
-zig build py-wheel
 ```
-
-
-## Zig core library
-
-The core library is implemented in Zig with two build targets: native and `wasm32-freestanding`. It integrates a Rust‑based regex engine (using `regex-automata`) compiled to static libraries (`.a`) for both native and WASM, then linked into the Zig library.
-
-Highlights:
-- Pipeline architecture with two pipelines: `mask` and `restore`
-- Session holds configured components and allocators; pipelines are pure and side‑effect free
-- RegexRecognizer (Rust regex via C ABI), NerRecognizer (external NER → spans), SpanMerger (merge/filter/dedup spans)
-- Placeholders are dynamically generated like `__PII_EMAIL_ADDRESS_00000001__`, but produced using a stack buffer (no heap) and metadata stores only `(EntityType, serial)` to avoid dangling pointers and minimize memory
-- Restore reconstructs placeholders on the fly and replaces them with the original spans in order
-- Built and tested with Zig 0.15.1; Rust static libs are produced for native and `wasm32-unknown-unknown`
-
-### Prerequisites
-
-- Zig 0.15.1 (required)
-- Rust toolchain (stable) with Cargo
-  - Add WASM target: `rustup target add wasm32-unknown-unknown`
-
-Verify versions:
-
-```bash
-zig version        # should print 0.15.1
-rustc --version
-cargo --version
-```
-
-### Build (native + WASM)
-
-The build orchestrates Rust static libraries and Zig artifacts automatically:
-
-```bash
-# From repository root
-zig build
-```
-
-What happens:
-- Builds Rust regex C-ABI static libs:
-  - Native: `libs/regex/target/release/libaifw_regex.a`
-  - WASM: `libs/regex/target/wasm32-unknown-unknown/release/libaifw_regex.a`
-- Builds Zig static libraries:
-  - Native: `oneaifw_core` (.a)
-  - WASM (freestanding): `oneaifw_core_wasm` (.a)
 
 Artifacts are installed under `zig-out/`.
 
@@ -231,11 +190,23 @@ zig-out/bin/aifw_core_test
 
 This test exercises the full mask/restore pipeline, including the Rust regex recognizers.
 
-### Notes on the core design
 
-- The `Pipeline` has `mask` and `restore` modes. Masking replaces sensitive spans with placeholders like `__PII_EMAIL_ADDRESS_00000001__` and records metadata; restoring reconstructs the original text using that metadata.
-- Placeholders are generated without heap allocations using a stack buffer; metadata stores only `(EntityType, serial)` to minimize memory and avoid pointer invalidation.
+## The design of Zig aifw core library
+
+The aifw core library is implemented in Zig with two build targets: native and `wasm32-freestanding`. It integrates a Rust‑based regex engine (using `regex-automata`) compiled to static libraries (`.a`) for both native and WASM, then linked into the Zig library.
+
+Highlights:
+- Pipeline architecture with two pipelines: `mask` and `restore`.
+- Sessions hold configured components and allocators; pipelines are pure and side‑effect‑free.
+- PII detection is produced by a composite of:
+      RegexRecognizer (Rust regex via C ABI),
+      NerRecognizer (external NER → spans),
+      SpanMerger (merge, filter, and de‑duplicate spans)
 - Rust regex is implemented with `regex-automata` and exposed via a C ABI static library; it is built for native and WASM targets and linked into the Zig core.
+- Masking replaces sensitive spans with placeholders like `__PII_EMAIL_ADDRESS_00000001__` and records minimal metadata; restoring reconstructs the original text using that metadata.
+- Placeholders are generated using a stack buffer (no heap); metadata stores only `(EntityType, serial_id)` to minimize memory and avoid pointer issues.
+- Built and tested with Zig 0.15.1; Rust static libs are produced for native and `wasm32-unknown-unknown`.
+
 
 ## LLM API key JSON format (OpenAI-compatible)
 
@@ -254,26 +225,81 @@ Example:
 
 Note: Keys using underscores are also accepted (e.g., `openai_api_key`, `openai_base_url`, `openai_model`).
 
-## What we protect for you
+## JavaScript projects
 
-Privacy:
-- Physical Address
-- Email Address
-- Name[optional]
-- Phone
-- Bank Account
-- Paymant Information
+This repo uses a pnpm workspace (see `pnpm-workspace.yaml`) to manage all JS projects. Always install dependencies from the repo root:
 
-Secrets:
-- Verification Code
-- Password 
+```bash
+pnpm -w install
+```
 
-Crypto:
-- Seed
-- Private Key
-- Address
+### Build aifw-js library:`@oneaifw/aifw-js`
 
+The library bundles Transformers.js, copies ORT/AIFW WASM files, and stages configured NER models.
 
+Requirements:
+- Build the core first (`zig build`) so `zig-out/bin/liboneaifw_core.wasm` exists
+- Prepare model files under `ner-models/` or set `AIFW_MODELS_DIR`
+
+Build:
+
+```bash
+# From repo root
+pnpm -w --filter @oneaifw/aifw-js build
+```
+
+Environment variables affecting model copy (see `libs/aifw-js/scripts/copy-assets.mjs`):
+- `AIFW_MODELS_DIR` (defaults to `ner-models/`)
+- `AIFW_MODEL_IDS` comma‑separated model IDs (default: `funstory-ai/neurobert-mini`)
+The user must correctly set these two variables to build oneaifw/aifw-js project.
+
+Model preparation (optional helpers):
+- `tests/transformer-js/scripts/prep-models.mjs` downloads and organizes models for browser usage
+  - Online: `ALLOW_REMOTE=1 node tests/transformer-js/scripts/prep-models.mjs`
+  - Honor `HF_TOKEN`, proxy vars as needed
+
+### Run the web demo (`apps/webapp`)
+
+```bash
+pnpm -w --filter @oneaifw/aifw-js build
+cd apps/webapp
+pnpm dev
+```
+
+Offline build (copies library dist and produces `aifw-offline.html`):
+
+```bash
+cd apps/webapp
+pnpm offline
+```
+
+Serve with cross‑origin isolation helper (if needed for WASM threading):
+
+```bash
+pnpm run serve:coi
+# open the printed URL
+```
+
+### Browser extension (`browser_extension`)
+
+See `browser_extension/README.md` for packaging and loading into Chrome/Edge. In short:
+
+```bash
+pnpm -w --filter @oneaifw/aifw-js build
+mkdir -p browser_extension/vendor/aifw-js
+rsync -a --exclude 'models' libs/aifw-js/dist/* browser_extension/vendor/aifw-js
+# then load the folder as an unpacked extension
+```
+
+## Python backend (`py-origin`)
+
+The backend service and CLI are in `py-origin/`. It provides HTTP APIs:
+- `/api/call`, `/api/mask_text`, `/api/restore_text`, `/api/mask_text_batch`, `/api/restore_text_batch`
+
+Authentication:
+- Standard `Authorization` header; configure the key with env `AIFW_HTTP_API_KEY` or CLI option
+
+Start here: `py-origin/README.md`.
 
 ## Docker
 
