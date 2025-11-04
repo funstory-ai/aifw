@@ -25,6 +25,12 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Activate pnpm 8.15.4
+        run: corepack prepare pnpm@8.15.4 --activate
+
       - name: Cache APT archives (llvm)
         uses: actions/cache@v4
         with:
