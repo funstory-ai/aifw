@@ -25,57 +25,26 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Setup LLVM 20 (cached)
-        uses: KyleMayes/install-llvm-action@v2
+      - name: Cache APT archives (llvm)
+        uses: actions/cache@v4
         with:
-          version: "20.1.5"
-          cached: true
+          path: |
+            /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-llvm20-${{ hashFiles('.github/workflows/aifw-release.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-
 
-      - name: Ensure llvm-ar/ld.lld available on PATH
-        shell: bash
+      - name: Install LLVM 20 toolchain (llvm-ar, lld)
         run: |
-          set -euxo pipefail
-          echo "LLVM_PATH=${LLVM_PATH:-}"
-          if command -v llvm-ar >/dev/null 2>&1; then
-            echo "llvm-ar already available: $(command -v llvm-ar)"
-            exit 0
-          fi
-
-          shopt -s nullglob
-          CANDIDATES=()
-          # 1) action-provided path
-          if [ -n "${LLVM_PATH:-}" ] && [ -d "${LLVM_PATH}/bin" ]; then
-            CANDIDATES+=("${LLVM_PATH}/bin")
-          fi
-          # 2) llvm-config
-          if command -v llvm-config >/dev/null 2>&1; then
-            CANDIDATES+=("$(llvm-config --bindir)")
-          fi
-          # 3) clang location
-          if command -v clang >/dev/null 2>&1; then
-            CANDIDATES+=("$(dirname "$(command -v clang)")")
-          fi
-          # 4) hosted toolcache globs
-          for d in /opt/hostedtoolcache/llvm/*/*/bin; do CANDIDATES+=("$d"); done
-          # 5) distro defaults
-          CANDIDATES+=(/usr/lib/llvm-20/bin /usr/lib/llvm-19/bin)
-
-          BIN_DIR=""
-          for d in "${CANDIDATES[@]}"; do
-            if [ -d "$d" ] && [ -x "$d/llvm-ar" ]; then BIN_DIR="$d"; break; fi
-          done
-
-          if [ -z "$BIN_DIR" ]; then
-            echo "ERROR: llvm-ar not found in candidates: ${CANDIDATES[*]}" >&2
-            exit 1
-          fi
-
-          echo "Using LLVM bin: $BIN_DIR"
-          sudo ln -sf "$BIN_DIR/llvm-ar" /usr/local/bin/llvm-ar
-          if [ -x "$BIN_DIR/ld.lld" ]; then
-            sudo ln -sf "$BIN_DIR/ld.lld" /usr/local/bin/ld.lld
-          fi
-          command -v llvm-ar
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y curl gnupg lsb-release
+          curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20 all
+          # Ensure well-known tool names are available in PATH
+          sudo ln -sf /usr/bin/llvm-ar-20 /usr/local/bin/llvm-ar
+          sudo ln -sf /usr/bin/ld.lld-20 /usr/local/bin/ld.lld
 
       - name: Setup Rust (stable + wasm32 target)
         uses: dtolnay/rust-toolchain@stable
