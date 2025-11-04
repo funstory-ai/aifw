@@ -25,10 +25,16 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Rust (stable + wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
       - name: Install Zig
-        uses: mlugg/setup-zig@v1
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.15.1
+          use-cache: true
 
       - name: Build Zig core
         run: zig build
@@ -87,7 +93,7 @@ jobs:
         contains(github.event.release.name, '[docker]')
       ))
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 600
     permissions:
       contents: read
       packages: write
@@ -189,7 +195,7 @@ jobs:
         contains(github.event.release.name, '[docker]')
       ))
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 300
+    timeout-minutes: 600
     permissions:
       contents: read
       packages: write
