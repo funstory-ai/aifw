@@ -22,6 +22,8 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
     });
     lib.root_module.strip = optimize != .Debug;
+    // Link C runtime for native (Rust staticlib references libc symbols like strlen)
+    lib.root_module.link_libc = true;
     // Build and link Rust regex (native)
     const cargo_native = b.addSystemCommand(&[_][]const u8{ "cargo", "build", "--release" });
     cargo_native.setCwd(b.path("libs/regex"));
@@ -88,6 +90,7 @@ pub fn build(b: *std.Build) void {
     unit_tests.root_module.unwind_tables = .sync;
     unit_tests.root_module.omit_frame_pointer = false;
     unit_tests.root_module.error_tracing = true;
+    unit_tests.root_module.link_libc = true;
     // Ensure Rust native staticlib is built before unit tests and link it
     unit_tests.step.dependOn(&cargo_native.step);
     unit_tests.addObjectFile(b.path("libs/regex/target/release/libaifw_regex.a"));
@@ -116,6 +119,7 @@ pub fn build(b: *std.Build) void {
     integ.root_module.unwind_tables = .sync;
     integ.root_module.omit_frame_pointer = false;
     integ.root_module.error_tracing = true;
+    integ.root_module.link_libc = true;
     integ.root_module.addImport("aifw_core", aifw_core_native);
     // Ensure Rust native staticlib is built before integration test and link it
     integ.step.dependOn(&cargo_native.step);
