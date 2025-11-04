@@ -63,7 +63,7 @@ class AnonymizerWrapper:
         counter = 0
         for r in sorted(selected, key=lambda x: x.start):
             counter += 1
-            pii_id = f"{counter:08x}"
+            pii_id = f"{counter}"
             placeholder = f"__PII_{r.entity_type}_{pii_id}__"
             assigned.append((r, placeholder))
         for r, placeholder in sorted(assigned, key=lambda t: t[0].start, reverse=True):
@@ -79,9 +79,9 @@ class AnonymizerWrapper:
         # Index original values by unique id suffix for robust matching
         unique_id_to_value: Dict[str, str] = {}
         for placeholder_token, original_value in placeholders_map.items():
-            m = re.search(r"_([0-9a-fA-F]{8})__$", placeholder_token)
+            m = re.search(r"_(\d+)__$", placeholder_token)
             if m:
-                unique_id_to_value[m.group(1).lower()] = original_value
+                unique_id_to_value[m.group(1)] = original_value
 
         # First, try exact replacements
         for placeholder_token, original_value in placeholders_map.items():
@@ -90,9 +90,9 @@ class AnonymizerWrapper:
         logger.debug(f"restore: after_exact={restored}")
 
         # Second, handle partial/altered tokens commonly produced by LLMs
-        # (A) Original value followed by leaked uuid suffix like '...<orig>abcdef12__' -> remove suffix
+        # (A) Original value followed by leaked id suffix like '...<orig>12345__' -> remove suffix
         for placeholder_token, original_value in placeholders_map.items():
-            m = re.search(r"_([0-9a-fA-F]{8})__$", placeholder_token)
+            m = re.search(r"_(\d+)__$", placeholder_token)
             if not m:
                 continue
             unique_id = m.group(1)
@@ -103,10 +103,10 @@ class AnonymizerWrapper:
 
         # (B) Placeholder variants in text: allow optional leading/trailing underscores to be missing
         # Match tokens like '__PII_..._<id>__', 'PII_..._<id>', '_PII_..._<id>__', etc.
-        generic_pattern = re.compile(r"_?_{0,1}PII[\w-]*_([0-9a-fA-F]{8})_?_{0,1}", re.IGNORECASE)
+        generic_pattern = re.compile(r"_?_{0,1}PII[\w-]*_(\d+)_?_{0,1}", re.IGNORECASE)
 
         def replace_generic(m: re.Match) -> str:
-            uid = m.group(1).lower()
+            uid = m.group(1)
             return unique_id_to_value.get(uid, m.group(0))
 
         restored = generic_pattern.sub(replace_generic, restored)

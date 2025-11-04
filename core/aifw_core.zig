@@ -441,9 +441,9 @@ fn dedupOverlappingSpans(allocator: std.mem.Allocator, spans: []const RecogEntit
     if (spans.len == 0) return allocator.alloc(RecogEntity, 0);
 
     // copy spans for sorting by priority: higher score, longer length, earlier start
-    const work = try allocator.dupe(RecogEntity, spans);
-    errdefer allocator.free(work);
-    std.sort.block(RecogEntity, work, {}, struct {
+    const dup_spans = try allocator.dupe(RecogEntity, spans);
+    errdefer allocator.free(dup_spans);
+    std.sort.block(RecogEntity, dup_spans, {}, struct {
         fn lessThan(_: void, a: RecogEntity, b: RecogEntity) bool {
             if (a.score != b.score) return a.score > b.score; // higher first
             const a_len = a.end - a.start;
@@ -453,14 +453,14 @@ fn dedupOverlappingSpans(allocator: std.mem.Allocator, spans: []const RecogEntit
         }
     }.lessThan);
 
-    var selected = try std.ArrayList(RecogEntity).initCapacity(allocator, work.len);
+    var selected = try std.ArrayList(RecogEntity).initCapacity(allocator, dup_spans.len);
     errdefer selected.deinit(allocator);
     const overlaps = struct {
         fn f(a: RecogEntity, b: RecogEntity) bool {
             return !(a.end <= b.start or b.end <= a.start);
         }
     };
-    for (work) |cand| {
+    for (dup_spans) |cand| {
         var ok = true;
         for (selected.items) |s| {
             if (overlaps.f(cand, s)) {
@@ -470,7 +470,7 @@ fn dedupOverlappingSpans(allocator: std.mem.Allocator, spans: []const RecogEntit
         }
         if (ok) try selected.append(allocator, cand);
     }
-    allocator.free(work);
+    allocator.free(dup_spans);
 
     // Sort back to start order for downstream placeholder building
     std.sort.block(RecogEntity, selected.items, {}, struct {
@@ -562,14 +562,15 @@ fn maxPlaceholderLen() comptime_int {
     inline for (fields) |f| {
         if (f.name.len > max_name_len) max_name_len = f.name.len;
     }
-    // "__PII_" + name + "_" + 8 hex + "__"
-    return 6 + max_name_len + 1 + 8 + 2;
+    // u32 is 4 bytes, so 10 decimal digits is enough
+    // "__PII_" + name + "_" + 10 decimal digits + "__"
+    return 6 + max_name_len + 1 + 10 + 2;
 }
 
 const PLACEHOLDER_MAX_LEN: usize = maxPlaceholderLen();
 
 fn writePlaceholder(buf: []u8, t: EntityType, serial: u32) ![]u8 {
-    return std.fmt.bufPrint(buf, "__PII_{s}_{X:0>8}__", .{ @tagName(t), serial });
+    return std.fmt.bufPrint(buf, "__PII_{s}_{d}__", .{ @tagName(t), serial });
 }
 
 pub const SessionInitArgs = extern struct {
