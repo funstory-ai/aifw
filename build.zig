@@ -42,9 +42,10 @@ pub fn build(b: *std.Build) void {
         .root_module = aifw_core_wasm_mod,
     });
     wasm_exe.root_module.strip = optimize != .Debug;
+    // Build as a library-style WASM module without an entry point
+    wasm_exe.entry = .disabled;
     // Ensure required exports are retained in the final WASM
     wasm_exe.root_module.export_symbol_names = &[_][]const u8{
-        "_start",
         "aifw_malloc",
         "aifw_free_sized",
         "aifw_string_free",

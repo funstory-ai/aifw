@@ -1004,10 +1004,7 @@ pub export fn aifw_string_free(str: [*:0]u8) void {
     globalAllocator().free(std.mem.span(str));
 }
 
-// Minimal entry point for wasm32-freestanding executable builds
-pub export fn _start() void {
-    // no-op; JS host calls exported APIs directly
-}
+// Note: Do not export a custom _start here to avoid symbol collisions with std/start on hosted targets.
 
 /// WASM host buffer allocation helpers
 pub export fn aifw_malloc(n: usize) [*:0]allowzero u8 {
