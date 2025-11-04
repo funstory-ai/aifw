@@ -48,6 +48,7 @@ pub fn build(b: *std.Build) void {
     wasm_exe.entry = .disabled;
     // Ensure required exports are retained in the final WASM
     wasm_exe.root_module.export_symbol_names = &[_][]const u8{
+        "strlen",
         "aifw_malloc",
         "aifw_free_sized",
         "aifw_string_free",

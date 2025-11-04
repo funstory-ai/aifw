@@ -15,7 +15,12 @@ pub const std_options = std.Options{
 };
 
 // WASM-specific shims (e.g., C runtime functions) are provided only for freestanding targets
-const _ = if (is_freestanding) @import("wasm_shims.zig") else {};
+// const _ = if (is_freestanding) @import("wasm_shims.zig") else {};
+
+// export strlen for Rust regex in wasm32-freestanding
+pub export fn strlen(s: [*:0]const u8) usize {
+    return std.mem.len(s);
+}
 
 extern fn js_log(level: u8, ptr: [*]const u8, len: usize) void;
 
