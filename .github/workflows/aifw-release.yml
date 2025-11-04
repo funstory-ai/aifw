@@ -3,9 +3,94 @@ name: aifw-release
 on:
   release:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      build_docker:
+        description: 'Build Docker images'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
-  docker:
+  aifw-js-package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@v3
+        with:
+          zig-version: 0.15.1
+
+      - name: Build Zig core
+        run: zig build
+
+      - name: Install dependencies
+        run: pnpm -w install
+
+      - name: Build aifw-js (without models and ORT WASM)
+        env:
+          AIFW_SKIP_MODELS: '1'
+          AIFW_SKIP_ORT_WASM: '1'
+        run: pnpm -w --filter @oneaifw/aifw-js build
+
+      - name: Create release package
+        run: |
+          cd libs/aifw-js/dist
+          # Get version from release tag or ref name
+          if [ "${{ github.event_name }}" == "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          # Remove 'v' prefix if present
+          VERSION="${VERSION#v}"
+          PACKAGE_NAME="aifw-js-${VERSION}"
+          mkdir -p ../../../release-packages
+          tar -czf "../../../release-packages/${PACKAGE_NAME}.tar.gz" .
+          echo "Package created: release-packages/${PACKAGE_NAME}.tar.gz"
+          ls -lh ../../../release-packages/
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: aifw-js-package
+          path: release-packages/*.tar.gz
+          retention-days: 90
+
+      - name: Upload to release (if release event)
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-packages/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-amd64:
+    # Run only if explicitly requested:
+    # - workflow_dispatch: inputs.build_docker == true
+    # - release: release title/body contains explicit opt-in markers
+    #   (any of: 'build_docker=true', 'docker: true', or title contains '[docker]')
+    if: |
+      (github.event_name == 'workflow_dispatch' && inputs.build_docker == true) ||
+      (github.event_name == 'release' && (
+        contains(github.event.release.body, 'build_docker=true') ||
+        contains(github.event.release.body, 'docker: true') ||
+        contains(github.event.release.name, '[docker]')
+      ))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -15,9 +100,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -29,30 +111,33 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
+      - name: Extract metadata (amd64)
+        id: meta_amd64
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/oneaifw
+          flavor: |
+            suffix=-amd64
           tags: |
             type=ref,event=tag
             type=raw,value=latest
+            type=sha,prefix={{branch}}-
 
-      - name: Build and push (multi-arch)
+      - name: Build and push backend (amd64)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: py-origin/Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           build-args: |
             SPACY_PROFILE=minimal
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_amd64.outputs.tags }}
+          labels: ${{ steps.meta_amd64.outputs.labels }}
 
-      - name: Build and push (web)
+      - name: Build and push web (amd64)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -62,13 +147,13 @@ jobs:
           build-args: |
             SPACY_PROFILE=minimal
           tags: |
-            ghcr.io/${{ github.repository_owner }}/oneaifw-web:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/oneaifw-web:latest
+            ghcr.io/${{ github.repository_owner }}/oneaifw-web:${{ github.ref_name }}-amd64
+            ghcr.io/${{ github.repository_owner }}/oneaifw-web:latest-amd64
           labels: |
             org.opencontainers.image.title=OneAIFW Web
             org.opencontainers.image.description=AI Framework Web Interface
-            org.opencontainers.image.version=${{ github.ref_name }}
-            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+            org.opencontainers.image.version=${{ github.ref_name || github.sha }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at || github.event.head_commit.timestamp }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       # Harbor push with registry cache (action cache on your own server)
@@ -80,48 +165,196 @@ jobs:
           username: ${{ secrets.HARBOR_USERNAME }}
           password: ${{ secrets.HARBOR_PASSWORD }}
 
-      - name: Compute Harbor tags
-        if: env.DO_HARBOR == 'true'
-        id: harbor_meta
-        run: |
-          IMAGE_BASE=registry.cn-shanghai.aliyuncs.com/immtranslate/oneaifw
-          echo "image_base=${IMAGE_BASE}" >> $GITHUB_OUTPUT
-          TAGS=("${IMAGE_BASE}:${GITHUB_SHA}" "${IMAGE_BASE}:latest")
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            TAGS+=("${IMAGE_BASE}:${GITHUB_REF_NAME}")
-          fi
-          printf "%s\n" "${TAGS[@]}" | paste -sd"," - | awk '{print "tags=" $0}' >> $GITHUB_OUTPUT
-
-      - name: Build and push to Harbor (with registry cache)
+      - name: Build and push to Harbor web with registry cache (amd64)
         if: env.DO_HARBOR == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: web/Dockerfile
           push: true
-          tags: ${{ steps.harbor_meta.outputs.tags }}
+          platforms: linux/amd64
+          tags: |
+            registry.cn-shanghai.aliyuncs.com/immtranslate/oneaifw:${{ github.sha }}-amd64
+            registry.cn-shanghai.aliyuncs.com/immtranslate/oneaifw:latest-amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Print Harbor image URLs
-        if: env.DO_HARBOR == 'true'
-        run: |
-          echo "Harbor images:"
-          echo "${{ steps.harbor_meta.outputs.tags }}" | tr ',' '\n'
+  docker-arm64:
+    # Run only if explicitly requested:
+    # - workflow_dispatch: inputs.build_docker == true
+    # - release: release title/body contains explicit opt-in markers
+    #   (any of: 'build_docker=true', 'docker: true', or title contains '[docker]')
+    if: |
+      (github.event_name == 'workflow_dispatch' && inputs.build_docker == true) ||
+      (github.event_name == 'release' && (
+        contains(github.event.release.body, 'build_docker=true') ||
+        contains(github.event.release.body, 'docker: true') ||
+        contains(github.event.release.name, '[docker]')
+      ))
+    runs-on: ubuntu-24.04-arm64
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DO_HARBOR: ${{ secrets.HARBOR_USERNAME != '' && secrets.HARBOR_PASSWORD != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # For forks or when Harbor secrets are not available, still perform a local build (no push)
-      - name: Build web image (no push, for forks)
-        if: env.DO_HARBOR != 'true'
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (arm64)
+        id: meta_arm64
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/oneaifw
+          flavor: |
+            suffix=-arm64
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push backend (arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: py-origin/Dockerfile
+          push: true
+          platforms: linux/arm64
+          build-args: |
+            SPACY_PROFILE=minimal
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta_arm64.outputs.tags }}
+          labels: ${{ steps.meta_arm64.outputs.labels }}
+
+      - name: Build and push web (arm64)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: web/Dockerfile
-          push: false
-          platforms: linux/amd64
+          push: true
+          platforms: linux/arm64
           build-args: |
             SPACY_PROFILE=minimal
           tags: |
-            local/oneaifw-web:ci
+            ghcr.io/${{ github.repository_owner }}/oneaifw-web:${{ github.ref_name }}-arm64
+            ghcr.io/${{ github.repository_owner }}/oneaifw-web:latest-arm64
+          labels: |
+            org.opencontainers.image.title=OneAIFW Web
+            org.opencontainers.image.description=AI Framework Web Interface
+            org.opencontainers.image.version=${{ github.ref_name || github.sha }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at || github.event.head_commit.timestamp }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      # Harbor push with registry cache (action cache on your own server)
+      - name: Login to Harbor
+        if: env.DO_HARBOR == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: registry.cn-shanghai.aliyuncs.com
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Build and push to Harbor web with registry cache (arm64)
+        if: env.DO_HARBOR == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: web/Dockerfile
+          push: true
+          platforms: linux/arm64
+          tags: |
+            registry.cn-shanghai.aliyuncs.com/immtranslate/oneaifw:${{ github.sha }}-arm64
+            registry.cn-shanghai.aliyuncs.com/immtranslate/oneaifw:latest-arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker-merge:
+    if: |
+      (github.event_name == 'workflow_dispatch' && inputs.build_docker == true) ||
+      (github.event_name == 'release' && (
+        contains(github.event.release.body, 'build_docker=true') ||
+        contains(github.event.release.body, 'docker: true') ||
+        contains(github.event.release.name, '[docker]')
+      ))
+    runs-on: ubuntu-latest
+    needs: [docker-amd64, docker-arm64]
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DO_HARBOR: ${{ secrets.HARBOR_USERNAME != '' && secrets.HARBOR_PASSWORD != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (canonical)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/oneaifw
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+            type=sha,prefix={{branch}}-
+
+      - name: Create multi-arch manifest (backend, GHCR)
+        run: |
+          echo "${{ steps.meta.outputs.tags }}" | while read -r tag; do
+            [ -z "$tag" ] && continue
+            docker buildx imagetools create \
+              -t "$tag" \
+              "${tag}-amd64" \
+              "${tag}-arm64"
+          done
+
+      - name: Create multi-arch manifest (web, GHCR)
+        run: |
+          for t in "${{ github.ref_name }}" latest; do
+            docker buildx imagetools create \
+              -t "ghcr.io/${{ github.repository_owner }}/oneaifw-web:${t}" \
+              "ghcr.io/${{ github.repository_owner }}/oneaifw-web:${t}-amd64" \
+              "ghcr.io/${{ github.repository_owner }}/oneaifw-web:${t}-arm64"
+          done
+
+      # Harbor: create multi-arch manifests if enabled
+      - name: Login to Harbor
+        if: env.DO_HARBOR == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: registry.cn-shanghai.aliyuncs.com
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Create multi-arch manifest (web, Harbor)
+        if: env.DO_HARBOR == 'true'
+        run: |
+          for t in "${GITHUB_SHA}" latest; do
+            docker buildx imagetools create \
+              -t "registry.cn-shanghai.aliyuncs.com/immtranslate/oneaifw:${t}" \
+              "registry.cn-shanghai.aliyuncs.com/immtranslate/oneaifw:${t}-amd64" \
+              "registry.cn-shanghai.aliyuncs.com/immtranslate/oneaifw:${t}-arm64"
+          done
 
       - name: Start fake LLM (echo) on runner
         run: |

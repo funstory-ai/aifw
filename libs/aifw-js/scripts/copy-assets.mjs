@@ -113,9 +113,23 @@ function copyModels(outRoot) {
 function main() {
   const outRoot = path.resolve(__dirname, '..', 'dist')
   ensureDir(outRoot)
-  copyTransformersWasm(outRoot)
+  
+  // Skip ORT WASM if AIFW_SKIP_ORT_WASM is set
+  if (!process.env.AIFW_SKIP_ORT_WASM) {
+    copyTransformersWasm(outRoot)
+  } else {
+    console.log('[skip] ORT WASM files (AIFW_SKIP_ORT_WASM is set)')
+  }
+  
+  // Always copy core WASM
   copyCoreWasm(outRoot)
-  copyModels(outRoot)
+  
+  // Skip models if AIFW_SKIP_MODELS is set
+  if (!process.env.AIFW_SKIP_MODELS) {
+    copyModels(outRoot)
+  } else {
+    console.log('[skip] NER model files (AIFW_SKIP_MODELS is set)')
+  }
 }
 
 main()
