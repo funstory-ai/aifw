@@ -25,15 +25,10 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 8
-
       - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v3
+        uses: mlugg/setup-zig@v1
         with:
-          zig-version: 0.15.1
+          version: 0.15.1
 
       - name: Build Zig core
         run: zig build
@@ -92,6 +87,7 @@ jobs:
         contains(github.event.release.name, '[docker]')
       ))
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     permissions:
       contents: read
       packages: write
@@ -120,8 +116,9 @@ jobs:
             suffix=-amd64
           tags: |
             type=ref,event=tag
+            type=ref,event=branch
             type=raw,value=latest
-            type=sha,prefix={{branch}}-
+            type=sha,format=short
 
       - name: Build and push backend (amd64)
         uses: docker/build-push-action@v6
@@ -191,7 +188,8 @@ jobs:
         contains(github.event.release.body, 'docker: true') ||
         contains(github.event.release.name, '[docker]')
       ))
-    runs-on: ubuntu-24.04-arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
     permissions:
       contents: read
       packages: write
@@ -220,8 +218,9 @@ jobs:
             suffix=-arm64
           tags: |
             type=ref,event=tag
+            type=ref,event=branch
             type=raw,value=latest
-            type=sha,prefix={{branch}}-
+            type=sha,format=short
 
       - name: Build and push backend (arm64)
         uses: docker/build-push-action@v6
@@ -315,8 +314,9 @@ jobs:
           images: ghcr.io/${{ github.repository_owner }}/oneaifw
           tags: |
             type=ref,event=tag
+            type=ref,event=branch
             type=raw,value=latest
-            type=sha,prefix={{branch}}-
+            type=sha,format=short
 
       - name: Create multi-arch manifest (backend, GHCR)
         run: |
