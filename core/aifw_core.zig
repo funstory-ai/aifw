@@ -14,6 +14,9 @@ pub const std_options = std.Options{
     .logFn = logFn,
 };
 
+// WASM-specific shims (e.g., C runtime functions) are provided only for freestanding targets
+const _ = if (is_freestanding) @import("wasm_shims.zig") else {};
+
 extern fn js_log(level: u8, ptr: [*]const u8, len: usize) void;
 
 fn logFn(
