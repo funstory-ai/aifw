@@ -276,7 +276,9 @@ export function buildNerEntitiesBuffer(wasm, items, jsText) {
   const toCoreAndTag = (e) => {
     const s = String(e || '');
     if (s.startsWith('B-')) return [s.slice(2), BioTag.Begin];
+    if (s.startsWith('S-')) return [s.slice(2), BioTag.Begin]; // single-token entity -> treat as Begin
     if (s.startsWith('I-')) return [s.slice(2), BioTag.Inside];
+    if (s.startsWith('E-')) return [s.slice(2), BioTag.Inside]; // end-token -> treat as Inside
     if (s) return [s, BioTag.None];
     return ['MISC', BioTag.None];
   };
@@ -284,7 +286,8 @@ export function buildNerEntitiesBuffer(wasm, items, jsText) {
     switch (core) {
       case 'PER': case 'PERSON': return EntityType.USER_MAME;
       case 'ORG': return EntityType.ORGANIZATION;
-      case 'LOC': return EntityType.PHYSICAL_ADDRESS;
+      case 'LOC': case 'GPE': case 'FAC': case 'ADDRESS':
+        return EntityType.PHYSICAL_ADDRESS;
       case 'MISC': return EntityType.None;
       default: return EntityType.None;
     }

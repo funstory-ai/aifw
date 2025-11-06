@@ -126,6 +126,174 @@ pub fn run(self: *const RegexRecognizer, input: []const u8) ![]RecogEntity {
     return try out.toOwnedSlice(self.allocator);
 }
 
+fn runChineseAddress(self: *const RegexRecognizer, input: []const u8) !?[]RecogEntity {
+    var out = try std.ArrayList(RecogEntity).initCapacity(self.allocator, 4);
+    errdefer out.deinit(self.allocator);
+
+    var pos: usize = 0;
+    while (pos < input.len) : (pos += 1) {
+        const rlen = hasRoadSuffix(input, @intCast(pos));
+        if (rlen == 0) continue;
+        // find left chunk before road suffix
+        var s: usize = pos;
+        var cnt: usize = 0;
+        while (s > 0 and cnt < 32) : (s -= 1) {
+            const b = input[s - 1];
+            if (isAsciiAlnum(b) or (b & 0x80) != 0) {
+                cnt += 1;
+            } else break;
+        }
+        if (cnt < 2) continue;
+        const road_end = pos + rlen;
+        const end_ext = rightExtendCnAddr(input, @intCast(road_end));
+
+        var start_ext: usize = s;
+        var k: usize = 0;
+        while (k < 3 and start_ext > 0) : (k += 1) {
+            // skip ASCII light separators
+            var p: usize = start_ext;
+            while (p > 0) : (p -= 1) {
+                const b = input[p - 1];
+                if (!isAsciiLight(b)) break;
+            }
+            const ad = hasAdminSuffix(input, @intCast(p));
+            if (ad == 0) break;
+            // find chunk before admin suffix
+            var s2: usize = p;
+            var c2: usize = 0;
+            while (s2 > 0 and c2 < 32) : (s2 -= 1) {
+                const b2 = input[s2 - 1];
+                if (isAsciiAlnum(b2) or (b2 & 0x80) != 0) {
+                    c2 += 1;
+                } else break;
+            }
+            if (c2 < 2) break;
+            start_ext = s2;
+        }
+
+        try out.append(self.allocator, .{
+            .entity_type = .PHYSICAL_ADDRESS,
+            .start = @intCast(start_ext),
+            .end = end_ext,
+            .score = 0.98,
+            .description = null,
+        });
+        pos = @intCast(end_ext);
+    }
+
+    // Merge adjacent address fragments if separated by at most one light connector
+    if (out.items.len >= 2) {
+        var merged = try std.ArrayList(RecogEntity).initCapacity(self.allocator, out.items.len);
+        defer merged.deinit(self.allocator);
+        var i: usize = 1;
+        var cur = out.items[0];
+        while (i < out.items.len) : (i += 1) {
+            const nxt = out.items[i];
+            const between = if (nxt.start > cur.end) input[cur.end..nxt.start] else input[0..0];
+            const trimmed = std.mem.trim(u8, between, " \t\r\n,");
+            const contiguous = (trimmed.len == 0);
+            if (contiguous and nxt.start >= cur.end) {
+                cur.end = nxt.end;
+                if (nxt.score > cur.score) cur.score = nxt.score;
+            } else {
+                try merged.append(self.allocator, cur);
+                cur = nxt;
+            }
+        }
+        try merged.append(self.allocator, cur);
+        return try merged.toOwnedSlice(self.allocator);
+    }
+    return try out.toOwnedSlice(self.allocator);
+}
+
+fn rightExtendCnAddr(input: []const u8, start_end: u32) u32 {
+    var i: usize = start_end;
+    const n = input.len;
+    // skip ASCII light seps
+    while (i < n) : (i += 1) {
+        const b = input[i];
+        if (!(b == ' ' or b == '\t' or b == '\r' or b == '\n' or b == ',')) break;
+    }
+    const begin_digits = i;
+    // digits
+    while (i < n and input[i] >= '0' and input[i] <= '9') : (i += 1) {}
+    if (i == begin_digits) return start_end; // no digits -> no tail
+    // require 号/號
+    if (matchToken(input, i, "号")) {
+        i += "号".len;
+    } else if (matchToken(input, i, "號")) {
+        i += "號".len;
+    } else {
+        return start_end;
+    }
+    // optional: 之 + digits
+    var j: usize = i;
+    if (matchToken(input, j, "之")) {
+        j += "之".len;
+        const d0 = j;
+        while (j < n and input[j] >= '0' and input[j] <= '9') : (j += 1) {}
+        if (j > d0) i = j;
+    }
+    // optional: - + digits
+    if (i < n and input[i] == '-') {
+        j = i + 1;
+        const d1 = j;
+        while (j < n and input[j] >= '0' and input[j] <= '9') : (j += 1) {}
+        if (j > d1) i = j;
+    }
+    // optional unit tokens
+    const UNITS = [_][]const u8{ "楼", "館", "樓", "栋", "棟", "幢", "座", "单元", "室" };
+    for (UNITS) |u| {
+        if (matchToken(input, i, u)) {
+            i += u.len;
+            break;
+        }
+    }
+    return @intCast(i);
+}
+
+fn matchToken(hay: []const u8, pos: usize, tok: []const u8) bool {
+    if (pos >= hay.len) return false;
+    const end = pos + tok.len;
+    if (end > hay.len) return false;
+    return std.mem.eql(u8, hay[pos..end], tok);
+}
+
+fn hasRoadSuffix(text: []const u8, pos: u32) usize {
+    // Check whether a known road suffix immediately follows position 'pos'
+    const SUF = [_][]const u8{
+        "大道", "大街", "环路", "环线", "路", "街", "巷", "弄", "里", "道", "胡同", "段", "期",
+        // Traditional forms for safety
+        "環路", "環線",
+    };
+    var i: usize = 0;
+    while (i < SUF.len) : (i += 1) {
+        if (matchToken(text, pos, SUF[i])) return SUF[i].len;
+    }
+    return 0;
+}
+
+fn hasAdminSuffix(text: []const u8, pos: u32) usize {
+    const ADMIN = [_][]const u8{
+        "省", "市", "自治州", "自治区", "州", "盟", "地区", "特别行政区", "区", "區", "县", "縣", "旗", "新区", "高新区", "经济技术开发区", "开发区", "街道", "镇", "鎮", "乡", "鄉", "里", "村",
+    };
+    var i: usize = 0;
+    while (i < ADMIN.len) : (i += 1) {
+        const suf = ADMIN[i];
+        const start = if (pos >= suf.len) pos - suf.len else 0;
+        if (start > 0 and matchToken(text, start, suf)) return suf.len;
+    }
+    return 0;
+}
+
+fn isAsciiAlnum(b: u8) bool {
+    return (b >= '0' and b <= '9') or (b >= 'A' and b <= 'Z') or (b >= 'a' and b <= 'z');
+}
+
+fn isAsciiLight(b: u8) bool {
+    return b == ' ' or b == '\t' or b == '\r' or b == '\n' or b == ',';
+}
+
 // ------------------------- Preset Patterns -------------------------
 /// Return preset pattern specs for a given entity type. Backed by static slices.
 pub fn presetSpecsFor(t: EntityType) []const PatternSpec {

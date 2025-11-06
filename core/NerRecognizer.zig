@@ -78,7 +78,7 @@ pub fn run(self: *const NerRecognizer, ner_data: NerRecogData) ![]RecogEntity {
     while (idx < ner_data.ner_entity_count) {
         std.log.debug("NerRecognizer.run: ner_data.ner_entities[{d}]={any}", .{ idx, ner_data.ner_entities[idx] });
         const e = aggregateNerRecogEntityToRecogEntity(text, &pos, ner_data.ner_entities, ner_data.ner_entity_count, &idx);
-        std.log.debug("ner_recog_entity: ner_entity={any}, score={d}, start={d}, end={d}", .{ e.entity_type, e.score, e.start, e.end });
+        std.log.debug("NerRecognizer.run: ner_entity={any}, score={d}, start={d}, end={d}", .{ e.entity_type, e.score, e.start, e.end });
         if (e.entity_type != .None) {
             try out.append(self.allocator, .{
                 .entity_type = e.entity_type,

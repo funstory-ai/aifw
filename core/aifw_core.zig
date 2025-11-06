@@ -10,7 +10,7 @@ const is_freestanding = builtin.target.os.tag == .freestanding;
 // When targeting wasm32-freestanding, route std.log to an extern JS-provided logger.
 // Otherwise, use Zig's default logger.
 pub const std_options = std.Options{
-    .log_level = .info,
+    .log_level = .debug,
     .logFn = logFn,
 };
 
@@ -341,7 +341,6 @@ pub const MaskPipeline = struct {
 
     pub fn run(self: *const MaskPipeline, args: MaskArgs) !PipelineResult {
         const original_text = std.mem.span(args.original_text);
-        std.log.debug("[mask] ner ents from ner_data: {any}", .{args.ner_data});
         // 1) Tokenizer (optional) - skipped
         // 2) Regex recognizers
         var merged = try std.ArrayList(RecogEntity).initCapacity(self.allocator, 4);
@@ -360,9 +359,13 @@ pub const MaskPipeline = struct {
         try merged.appendSlice(self.allocator, ner_ents);
         self.allocator.free(ner_ents);
 
+        // 3.1) Merge zh-address fragments first (NER GPE/FAC/LOC already mapped to PHYSICAL_ADDRESS)
+        const merged_zh_address_spans = try mergeZhAddressSpans(self.allocator, original_text, merged.items);
+        defer self.allocator.free(merged_zh_address_spans);
+
         // 4) SpanMerger: sort, dedup by range, filter by score >= 0.5
-        const spans = try merged.toOwnedSlice(self.allocator);
-        defer self.allocator.free(spans);
+        const spans = merged_zh_address_spans;
+        // defer self.allocator.free(spans);
         std.log.debug("[mask] spans before sort/filter: {d}", .{spans.len});
         std.sort.block(RecogEntity, spans, {}, struct {
             fn lessThan(_: void, a: RecogEntity, b: RecogEntity) bool {
@@ -444,6 +447,287 @@ pub const MaskPipeline = struct {
         };
     }
 };
+
+fn isAsciiLight(b: u8) bool {
+    return b == ' ' or b == '\t' or b == '\r' or b == '\n' or b == ',';
+}
+
+fn isAsciiAlnum(b: u8) bool {
+    return (b >= '0' and b <= '9') or (b >= 'A' and b <= 'Z') or (b >= 'a' and b <= 'z');
+}
+
+fn rightExtendCnAddr(text: []const u8, start_end: u32) u32 {
+    var i: usize = start_end;
+    const n = text.len;
+    // skip ASCII light seps
+    while (i < n) : (i += 1) {
+        const b = text[i];
+        if (!isAsciiLight(b)) break;
+    }
+    const d0 = i;
+    while (i < n and text[i] >= '0' and text[i] <= '9') : (i += 1) {}
+    if (i == d0) return start_end;
+    // allow spaces between digits and 号/號
+    while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+    if (matchToken(text, i, "号")) {
+        i += "号".len;
+    } else if (matchToken(text, i, "號")) {
+        i += "號".len;
+    } else return start_end;
+
+    var j: usize = i;
+    // optional: spaces then 之 then spaces and digits
+    while (j < n and isAsciiLight(text[j])) : (j += 1) {}
+    if (matchToken(text, j, "之")) {
+        j += "之".len;
+        while (j < n and isAsciiLight(text[j])) : (j += 1) {}
+        const d1 = j;
+        while (j < n and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
+        if (j > d1) i = j;
+    }
+    // optional: spaces, hyphen, spaces, digits
+    while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+    if (i < n and text[i] == '-') {
+        j = i + 1;
+        while (j < n and isAsciiLight(text[j])) : (j += 1) {}
+        const d2 = j;
+        while (j < n and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
+        if (j > d2) i = j;
+    }
+    const UNITS = [_][]const u8{ "楼", "館", "樓", "栋", "棟", "幢", "座", "单元", "室" };
+    for (UNITS) |u| {
+        if (matchToken(text, i, u)) {
+            i += u.len;
+            break;
+        }
+    }
+    return @intCast(i);
+}
+
+fn matchToken(hay: []const u8, pos: usize, tok: []const u8) bool {
+    if (pos >= hay.len) return false;
+    const end = pos + tok.len;
+    if (end > hay.len) return false;
+    return std.mem.eql(u8, hay[pos..end], tok);
+}
+
+fn endsWithAdminSuffix(text: []const u8, start_pos: u32, end_pos: u32) bool {
+    const ADMIN = [_][]const u8{
+        "省", "市", "自治州", "自治区", "州", "盟", "地区", "特别行政区", "区", "區", "县", "縣", "旗", "新区", "高新区", "经济技术开发区", "开发区", "街道", "镇", "鎮", "乡", "鄉", "里", "村",
+    };
+    var i: usize = 0;
+    while (i < ADMIN.len) : (i += 1) {
+        const suf = ADMIN[i];
+        const len = suf.len;
+        const st = if (end_pos >= len) end_pos - len else 0;
+        if (st >= start_pos and matchToken(text, st, suf)) return true;
+    }
+    return false;
+}
+
+fn hasHouseTailInside(text: []const u8, start_pos: u32, end_pos: u32) bool {
+    // naive check: does span end with 号/號 and contains at least one digit before it
+    if (end_pos == 0) return false;
+    var pos = end_pos;
+    var has_digit = false;
+    while (pos > start_pos) : (pos -= 1) {
+        const b = text[pos - 1];
+        if (b >= '0' and b <= '9') {
+            has_digit = true;
+            continue;
+        }
+        // stop when hit non-digit; check if this is 号/號 immediately after digits
+        if ((b == 0xE5 and pos >= 3) or (b == 0xE8 and pos >= 3)) {
+            // rely on matchToken for exact utf-8 token
+        }
+        break;
+    }
+    // Check token "号" or "號" ending at end_pos
+    if (has_digit) {
+        if (end_pos >= "号".len and matchToken(text, end_pos - "号".len, "号")) return true;
+        if (end_pos >= "號".len and matchToken(text, end_pos - "號".len, "號")) return true;
+    }
+    return false;
+}
+
+fn findHouseTailFrom(text: []const u8, from_pos: u32, max_lookahead: u32) u32 {
+    const n = text.len;
+    var i: usize = from_pos;
+    const limit = @min(n, from_pos + max_lookahead);
+    // scan forward for digits then 号/號
+    while (i < limit and !(text[i] >= '0' and text[i] <= '9')) : (i += 1) {}
+    if (i >= limit) return from_pos;
+    var j: usize = i;
+    while (j < limit and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
+    if (j >= limit) return from_pos;
+    // allow spaces between digits and 号/號
+    while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+    if (matchToken(text, j, "号")) {
+        j += "号".len;
+    } else if (matchToken(text, j, "號")) {
+        j += "號".len;
+    } else return from_pos;
+    // optional 之N with spaces around
+    var k: usize = j;
+    while (k < limit and isAsciiLight(text[k])) : (k += 1) {}
+    if (matchToken(text, k, "之")) {
+        k += "之".len;
+        while (k < limit and isAsciiLight(text[k])) : (k += 1) {}
+        const d0 = k;
+        while (k < limit and text[k] >= '0' and text[k] <= '9') : (k += 1) {}
+        if (k > d0) j = k;
+    }
+    // optional -N with spaces around
+    while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+    if (j < limit and text[j] == '-') {
+        k = j + 1;
+        while (k < limit and isAsciiLight(text[k])) : (k += 1) {}
+        const d1 = k;
+        while (k < limit and text[k] >= '0' and text[k] <= '9') : (k += 1) {}
+        if (k > d1) j = k;
+    }
+    // optional unit
+    const UNITS = [_][]const u8{ "楼", "館", "樓", "栋", "棟", "幢", "座", "单元", "室" };
+    for (UNITS) |u| {
+        if (matchToken(text, j, u)) {
+            j += u.len;
+            break;
+        }
+    }
+    return @intCast(j);
+}
+fn leftExtendCnAdmin(text: []const u8, start_pos: u32, max_steps: u32) u32 {
+    var start_ext: usize = start_pos;
+    var steps: u32 = 0;
+    while (steps < max_steps and start_ext > 0) : (steps += 1) {
+        // skip ASCII light seps before current start
+        var p: usize = start_ext;
+        while (p > 0) : (p -= 1) {
+            const b = text[p - 1];
+            if (!isAsciiLight(b)) break;
+        }
+        // check if an admin suffix ends exactly at p
+        const ADMIN = [_][]const u8{
+            "省", "市", "自治州", "自治区", "州", "盟", "地区", "特别行政区", "区", "區", "县", "縣", "旗", "新区", "高新区", "经济技术开发区", "开发区", "街道", "镇", "鎮", "乡", "鄉", "里", "村",
+        };
+        var i: usize = 0;
+        var matched: bool = false;
+        while (i < ADMIN.len) : (i += 1) {
+            const suf = ADMIN[i];
+            const st = if (p >= suf.len) p - suf.len else 0;
+            if (st > 0 and matchToken(text, st, suf)) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) break;
+        // find chunk start before that suffix
+        var s2: usize = p;
+        var cnt: usize = 0;
+        while (s2 > 0 and cnt < 32) : (s2 -= 1) {
+            const b2 = text[s2 - 1];
+            if (isAsciiAlnum(b2) or (b2 & 0x80) != 0) {
+                cnt += 1;
+            } else break;
+        }
+        if (cnt < 2) break;
+        start_ext = s2;
+    }
+    return @intCast(start_ext);
+}
+
+fn mergeAdjacentAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans_in: []const RecogEntity) ![]RecogEntity {
+    if (spans_in.len == 0) return allocator.alloc(RecogEntity, 0);
+    // sort by start, then by end desc
+    const tmp_spans = try allocator.dupe(RecogEntity, spans_in);
+    defer allocator.free(tmp_spans);
+    std.sort.block(RecogEntity, tmp_spans, {}, struct {
+        fn lessThan(_: void, a: RecogEntity, b: RecogEntity) bool {
+            if (a.start == b.start) return a.end > b.end; // longer first when same start
+            return a.start < b.start;
+        }
+    }.lessThan);
+
+    var out = try std.ArrayList(RecogEntity).initCapacity(allocator, tmp_spans.len);
+    errdefer out.deinit(allocator);
+    var cur = tmp_spans[0];
+    var i: usize = 1;
+    while (i < tmp_spans.len) : (i += 1) {
+        const nxt = tmp_spans[i];
+        if (cur.entity_type == .PHYSICAL_ADDRESS and nxt.entity_type == .PHYSICAL_ADDRESS and nxt.start >= cur.end) {
+            // check only ASCII light seps between
+            var ok = true;
+            var p: usize = cur.end;
+            while (p < nxt.start) : (p += 1) {
+                if (!isAsciiLight(text[p])) {
+                    ok = false;
+                    break;
+                }
+            }
+            std.log.debug("[merge] merge adjancent spans: cur={any}, nxt={any}, ok={}", .{ cur, nxt, ok });
+            if (ok) {
+                var merged = cur;
+                merged.end = nxt.end;
+                if (nxt.score > merged.score) merged.score = nxt.score;
+                cur = merged;
+                continue;
+            }
+        }
+        std.log.debug("[merge] append cur={any}, token_text={s}", .{ cur, text[cur.start..cur.end] });
+        try out.append(allocator, cur);
+        cur = nxt;
+    }
+    std.log.debug("[merge] append last cur={any}, token_text={s}", .{ cur, text[cur.start..cur.end] });
+    try out.append(allocator, cur);
+    return try out.toOwnedSlice(allocator);
+}
+
+fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans: []const RecogEntity) ![]RecogEntity {
+    const merged_adjacent = try mergeAdjacentAddressSpans(allocator, text, spans);
+    defer allocator.free(merged_adjacent);
+
+    // Address validation & expansion: must have house-number tail either inside span,
+    // or reachable by right-extending, or grown from admin-suffix seed within a window.
+    var merged_zh = try std.ArrayList(RecogEntity).initCapacity(allocator, merged_adjacent.len);
+    defer merged_zh.deinit(allocator);
+    for (merged_adjacent) |sp| {
+        if (sp.entity_type != .PHYSICAL_ADDRESS) {
+            try merged_zh.append(allocator, sp);
+            continue;
+        }
+        var keep = false;
+        var new_end: u32 = sp.end;
+
+        // Case 1: span already includes house tail (e.g., "100号")
+        if (hasHouseTailInside(text, sp.start, sp.end)) {
+            keep = true;
+        } else {
+            // Case 2: can right-extend from end to house tail
+            const ext_end = rightExtendCnAddr(text, sp.end);
+            if (ext_end > sp.end) {
+                keep = true;
+                new_end = ext_end;
+            }
+            // Case 3: if current token ends with admin suffix, try grow to the right within a window to house tail
+            else if (endsWithAdminSuffix(text, sp.start, sp.end)) {
+                const grown_end = findHouseTailFrom(text, sp.end, 96);
+                if (grown_end > sp.end) {
+                    keep = true;
+                    new_end = grown_end;
+                }
+            }
+        }
+        if (!keep) continue;
+
+        const new_start = leftExtendCnAdmin(text, sp.start, 3);
+        var out_sp = sp;
+        out_sp.start = new_start;
+        out_sp.end = new_end;
+        try merged_zh.append(allocator, out_sp);
+    }
+
+    return try merged_zh.toOwnedSlice(allocator);
+}
 
 fn dedupOverlappingSpans(allocator: std.mem.Allocator, spans: []const RecogEntity) ![]RecogEntity {
     if (spans.len == 0) return allocator.alloc(RecogEntity, 0);
