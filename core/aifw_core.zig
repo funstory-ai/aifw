@@ -10,7 +10,7 @@ const is_freestanding = builtin.target.os.tag == .freestanding;
 // When targeting wasm32-freestanding, route std.log to an extern JS-provided logger.
 // Otherwise, use Zig's default logger.
 pub const std_options = std.Options{
-    .log_level = .debug,
+    .log_level = .info,
     .logFn = logFn,
 };
 
@@ -483,6 +483,135 @@ fn isAsciiAlnum(b: u8) bool {
     return (b >= '0' and b <= '9') or (b >= 'A' and b <= 'Z') or (b >= 'a' and b <= 'z');
 }
 
+fn isAsciiAlpha(b: u8) bool {
+    return (b >= 'A' and b <= 'Z') or (b >= 'a' and b <= 'z');
+}
+
+fn utf8CpLenAt(text: []const u8, pos: usize) usize {
+    if (pos >= text.len) return 1;
+    const b = text[pos];
+    if (b < 0x80) return 1;
+    if ((b & 0xE0) == 0xC0) return if (pos + 1 <= text.len) 2 else 1;
+    if ((b & 0xF0) == 0xE0) return if (pos + 2 <= text.len) 3 else 1;
+    if ((b & 0xF8) == 0xF0) return if (pos + 3 <= text.len) 4 else 1;
+    return 1;
+}
+
+fn adminSuffixAt(text: []const u8, pos: usize) usize {
+    const ADMIN = [_][]const u8{
+        "省", "市", "自治州", "自治区", "州", "盟", "地区", "特别行政区", "区", "區", "县", "縣", "旗", "新区", "高新区", "经济技术开发区", "开发区", "街道", "镇", "鎮", "乡", "鄉", "里", "村",
+    };
+    var i: usize = 0;
+    while (i < ADMIN.len) : (i += 1) {
+        if (matchToken(text, pos, ADMIN[i])) return ADMIN[i].len;
+    }
+    return 0;
+}
+
+fn roadSuffixAt(text: []const u8, pos: usize) usize {
+    const SUF = [_][]const u8{
+        "大道", "大街", "环路", "环线", "路", "街", "巷", "弄", "里", "道", "胡同", "段", "期",
+        "環路", "環線",
+    };
+    var i: usize = 0;
+    while (i < SUF.len) : (i += 1) {
+        if (matchToken(text, pos, SUF[i])) return SUF[i].len;
+    }
+    return 0;
+}
+
+fn endsWithAny(text: []const u8, start: usize, end: usize, toks: []const []const u8) bool {
+    if (end <= start) return false;
+    var i: usize = 0;
+    while (i < toks.len) : (i += 1) {
+        const t = toks[i];
+        if (end >= start + t.len and matchToken(text, end - t.len, t)) return true;
+    }
+    return false;
+}
+
+fn endsWithPoiSuffix(text: []const u8, start: usize, end: usize) bool {
+    const POI = [_][]const u8{
+        "广场", "中心", "大厦", "花园", "花苑", "苑", "园", "城",    "天地", "港", "塔", "座", "馆", "廊", "坊", "里", "府", "湾",
+        "廣場", "中心", "大廈", "花園", "苑",    "園", "城", "天地", "港",    "塔", "座", "館", "廊", "坊", "里", "府", "灣",
+    };
+    return endsWithAny(text, start, end, &POI);
+}
+
+fn countCharsBetween(text: []const u8, a: usize, b: usize) usize {
+    const lo = @min(a, b);
+    const hi = @max(a, b);
+    var i: usize = lo;
+    var count: usize = 0;
+    while (i < hi) : (i += 1) {
+        const byte = text[i];
+        if ((byte & 0xC0) != 0x80) count += 1; // count non-continuation bytes
+    }
+    return count;
+}
+
+fn absorbTrailingRoomUnit(text: []const u8, pos: usize) usize {
+    var i = pos;
+    const n = text.len;
+    while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+    // ensure previous non-space run ends with digits
+    var j = i;
+    while (j > 0 and isAsciiLight(text[j - 1])) : (j -= 1) {}
+    var p = j;
+    var has_digits = false;
+    while (p > 0 and text[p - 1] >= '0' and text[p - 1] <= '9') : (p -= 1) {
+        has_digits = true;
+    }
+    if (!has_digits) return pos;
+    // accept room and floor units
+    const UROOM = [_][]const u8{ "单元", "室", "房", "层", "層", "楼" };
+    var ur: usize = 0;
+    while (ur < UROOM.len) : (ur += 1) {
+        if (matchToken(text, i, UROOM[ur])) {
+            i += UROOM[ur].len;
+            return i;
+        }
+    }
+    return pos;
+}
+
+fn detectNextAddressHeadWithin(text: []const u8, start_pos: usize, window: usize) bool {
+    const limit = @min(text.len, start_pos + window);
+    var p: usize = start_pos;
+    while (p < limit) : (p += 1) {
+        while (p < limit and isAsciiLight(text[p])) : (p += 1) {}
+        if (p >= limit) break;
+        const name_start = p;
+        // scan name and also check suffix inline (e.g., "南昌市")
+        while (p < limit) : (p += 1) {
+            // inline suffix detection at current p
+            if (roadSuffixAt(text, p) > 0 or adminSuffixAt(text, p) > 0) {
+                if (p > name_start) return true; // have a prefix chunk before suffix
+            }
+            const b = text[p];
+            if (isAsciiAlnum(b)) continue;
+            if ((b & 0x80) != 0 and !(b >= '0' and b <= '9')) continue;
+            break;
+        }
+        if (p <= name_start) continue;
+        var q: usize = p;
+        while (q < limit and isAsciiLight(text[q])) : (q += 1) {}
+        if (q >= limit) break;
+        if (roadSuffixAt(text, q) > 0) return true;
+        if (adminSuffixAt(text, q) > 0) return true;
+    }
+    return false;
+}
+
+fn heavySepAt(text: []const u8, pos: usize) usize {
+    const HEAVY = [_][]const u8{ "。", "！", "？", "；", "：", "、", "（", "）", "/", "\\", "|" };
+    var i: usize = 0;
+    while (i < HEAVY.len) : (i += 1) {
+        if (matchToken(text, pos, HEAVY[i])) return HEAVY[i].len;
+    }
+    return 0;
+}
+
 fn rightExtendCnAddr(text: []const u8, start_end: u32) u32 {
     var i: usize = start_end;
     const n = text.len;
@@ -491,88 +620,211 @@ fn rightExtendCnAddr(text: []const u8, start_end: u32) u32 {
         const b = text[i];
         if (!isAsciiLight(b)) break;
     }
-    const d0 = i;
-    while (i < n and text[i] >= '0' and text[i] <= '9') : (i += 1) {}
-    if (i == d0) return start_end;
-    // allow spaces between digits and 号/號
-    while (i < n and isAsciiLight(text[i])) : (i += 1) {}
-    if (matchToken(text, i, "号")) {
-        i += "号".len;
-    } else if (matchToken(text, i, "號")) {
-        i += "號".len;
-    } else return start_end;
+    // backward window anchor: if there is an existing house tail before end, we may allow generic-only tails
+    const back_start: usize = if (start_end > 128) start_end - 128 else 0;
+    const has_prior_anchor = hasHouseTailInside(text, @intCast(back_start), start_end);
 
     var j: usize = i;
-    // optional: spaces then 之 then spaces and digits
-    while (j < n and isAsciiLight(text[j])) : (j += 1) {}
-    if (matchToken(text, j, "之")) {
-        j += "之".len;
-        while (j < n and isAsciiLight(text[j])) : (j += 1) {}
-        const d1 = j;
-        while (j < n and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
-        if (j > d1) i = j;
-    }
-    // optional: spaces, hyphen, spaces, digits
-    while (i < n and isAsciiLight(text[i])) : (i += 1) {}
-    if (i < n and text[i] == '-') {
-        j = i + 1;
-        while (j < n and isAsciiLight(text[j])) : (j += 1) {}
-        const d2 = j;
-        while (j < n and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
-        if (j > d2) i = j;
-    }
-    const UNITS = [_][]const u8{ "楼", "館", "樓", "栋", "棟", "幢", "座", "单元", "室" };
-    for (UNITS) |u| {
-        if (matchToken(text, i, u)) {
-            i += u.len;
-            break;
+    // Try immediate digits + (号/號 or building tokens) as head anchor
+    const d0 = i;
+    while (j < n and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
+    var ok_head = false;
+    if (j > d0) {
+        // allow spaces between digits and 号/號 or building tokens
+        var k: usize = j;
+        while (k < n and isAsciiLight(text[k])) : (k += 1) {}
+        if (matchToken(text, k, "号")) {
+            k += "号".len;
+            ok_head = true;
+            j = k;
+        } else if (matchToken(text, k, "號")) {
+            k += "號".len;
+            ok_head = true;
+            j = k;
+        } else {
+            const BUILD = [_][]const u8{ "号楼", "号館", "號樓", "楼", "館", "樓", "栋", "棟", "幢", "座" };
+            var bi: usize = 0;
+            while (bi < BUILD.len) : (bi += 1) {
+                if (matchToken(text, k, BUILD[bi])) {
+                    k += BUILD[bi].len;
+                    ok_head = true;
+                    j = k;
+                    break;
+                }
+            }
         }
     }
-    return @intCast(i);
+
+    if (!ok_head and !has_prior_anchor) return start_end;
+
+    // If head anchor found, continue from j; otherwise stay at i and enter generic tails
+    if (ok_head) {
+        i = j;
+        // optional: spaces then 之 then spaces and digits
+        while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+        if (matchToken(text, i, "之")) {
+            i += "之".len;
+            while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+            const d1 = i;
+            while (i < n and text[i] >= '0' and text[i] <= '9') : (i += 1) {}
+            if (i == d1) {
+                // rollback if no digits after 之
+                i = d1; // no-op keep position
+            }
+        }
+        // optional: spaces, hyphen, spaces, digits
+        while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+        if (i < n and text[i] == '-') {
+            var t = i + 1;
+            while (t < n and isAsciiLight(text[t])) : (t += 1) {}
+            const d2 = t;
+            while (t < n and text[t] >= '0' and text[t] <= '9') : (t += 1) {}
+            if (t > d2) i = t;
+        }
+        // optional: spaces, room digits and unit tokens
+        while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+        const room_start = i;
+        while (i < n and text[i] >= '0' and text[i] <= '9') : (i += 1) {}
+        if (i > room_start) {
+            while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+            const UNITS = [_][]const u8{ "单元", "室", "房", "层", "層" };
+            var ui: usize = 0;
+            while (ui < UNITS.len) : (ui += 1) {
+                if (matchToken(text, i, UNITS[ui])) {
+                    i += UNITS[ui].len;
+                    break;
+                }
+            }
+        }
+    } else {
+        // no head anchor at current position, but prior anchor exists; proceed with generic-only tails starting at i
+    }
+
+    // optional: generic name+number+unit tails (repeat up to 2 times)
+    var loops: u32 = 0;
+    const MAX_EXT_BYTES: usize = 96;
+    const MAX_EXT_CHARS: usize = 48;
+    while (loops < 2) : (loops += 1) {
+        // heavy separator boundary
+        if (heavySepAt(text, i) > 0) break;
+        // forward lookahead blocking (wider window for UTF-8 Han)
+        if (detectNextAddressHeadWithin(text, i, 48)) break;
+        // total growth caps
+        if (i > start_end and (i - start_end) > MAX_EXT_BYTES) break;
+        if (countCharsBetween(text, @intCast(start_end), i) > MAX_EXT_CHARS) break;
+        while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+        // generic name with length cap (<=16 chars); allow empty if we have prior anchor
+        const MAX_NAME_CHARS: usize = 16;
+        const name_start = i;
+        var consumed_chars: usize = 0;
+        while (i < n and consumed_chars < MAX_NAME_CHARS) {
+            if (heavySepAt(text, i) > 0) break;
+            const b = text[i];
+            if (b >= '0' and b <= '9') break; // stop before digits
+            if (isAsciiAlpha(b)) {
+                i += 1;
+                consumed_chars += 1;
+                continue;
+            }
+            if ((b & 0x80) != 0) {
+                const step = utf8CpLenAt(text, i);
+                i += step;
+                consumed_chars += 1;
+                continue;
+            }
+            break;
+        }
+        if (i == name_start and !has_prior_anchor) break;
+        const name_end = i;
+        const has_poi = endsWithPoiSuffix(text, name_start, name_end);
+        while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+        // digits
+        const dstart2 = i;
+        while (i < n and text[i] >= '0' and text[i] <= '9') : (i += 1) {}
+        if (i == dstart2) {
+            if (has_prior_anchor) {
+                // no digits; allow absorbTrailingRoomUnit to catch trailing unit like 楼
+            } else break;
+        } else {
+            // if no poi suffix, enforce near-distance to digits (<=12 bytes)
+            if (!has_poi) {
+                const gap = dstart2 - name_end;
+                if (gap > 12) break;
+            }
+            while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+            // strong units
+            const STRONG = [_][]const u8{ "层", "層", "楼", "号", "號", "号楼", "号館", "號樓", "楼", "館", "樓", "栋", "棟", "幢", "座" };
+            var ok2 = false;
+            var su: usize = 0;
+            while (su < STRONG.len) : (su += 1) {
+                if (matchToken(text, i, STRONG[su])) {
+                    i += STRONG[su].len;
+                    ok2 = true;
+                    break;
+                }
+            }
+            if (!ok2) break;
+            // optional room tail
+            while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+            const r2s = i;
+            while (i < n and text[i] >= '0' and text[i] <= '9') : (i += 1) {}
+            if (i > r2s) {
+                while (i < n and isAsciiLight(text[i])) : (i += 1) {}
+                const UROOM = [_][]const u8{ "单元", "室", "房" };
+                var ur: usize = 0;
+                while (ur < UROOM.len) : (ur += 1) {
+                    if (matchToken(text, i, UROOM[ur])) {
+                        i += UROOM[ur].len;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    // absorb trailing unit like 室/房/层/樓 if directly follows digits
+    const new_i = absorbTrailingRoomUnit(text, i);
+    return @intCast(if (new_i > i) new_i else i);
 }
 
-fn matchToken(hay: []const u8, pos: usize, tok: []const u8) bool {
-    if (pos >= hay.len) return false;
-    const end = pos + tok.len;
-    if (end > hay.len) return false;
-    return std.mem.eql(u8, hay[pos..end], tok);
+fn matchToken(text: []const u8, pos: usize, token: []const u8) bool {
+    if (pos > text.len) return false;
+    if (pos + token.len > text.len) return false;
+    return std.mem.eql(u8, text[pos .. pos + token.len], token);
 }
 
-fn endsWithAdminSuffix(text: []const u8, start_pos: u32, end_pos: u32) bool {
+fn hasHouseTailInside(text: []const u8, start: u32, end: u32) bool {
+    var i: usize = start;
+    const limit: usize = end;
+    while (i < limit) : (i += 1) {
+        // digits
+        if (!(text[i] >= '0' and text[i] <= '9')) continue;
+        var j = i;
+        while (j < limit and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
+        while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+        // primary head units
+        if (j < limit and (matchToken(text, j, "号") or matchToken(text, j, "號"))) return true;
+        const STRONG = [_][]const u8{ "号楼", "号館", "號樓", "楼", "館", "樓", "栋", "棟", "幢", "座" };
+        var k: usize = 0;
+        while (k < STRONG.len) : (k += 1) {
+            if (matchToken(text, j, STRONG[k])) return true;
+        }
+        // otherwise continue scanning from j
+        i = j;
+    }
+    return false;
+}
+
+fn endsWithAdminSuffix(text: []const u8, start: u32, end: u32) bool {
+    if (end <= start) return false;
+    var e: usize = end;
+    while (e > start and isAsciiLight(text[e - 1])) : (e -= 1) {}
     const ADMIN = [_][]const u8{
         "省", "市", "自治州", "自治区", "州", "盟", "地区", "特别行政区", "区", "區", "县", "縣", "旗", "新区", "高新区", "经济技术开发区", "开发区", "街道", "镇", "鎮", "乡", "鄉", "里", "村",
     };
     var i: usize = 0;
     while (i < ADMIN.len) : (i += 1) {
-        const suf = ADMIN[i];
-        const len = suf.len;
-        const st = if (end_pos >= len) end_pos - len else 0;
-        if (st >= start_pos and matchToken(text, st, suf)) return true;
-    }
-    return false;
-}
-
-fn hasHouseTailInside(text: []const u8, start_pos: u32, end_pos: u32) bool {
-    // naive check: does span end with 号/號 and contains at least one digit before it
-    if (end_pos == 0) return false;
-    var pos = end_pos;
-    var has_digit = false;
-    while (pos > start_pos) : (pos -= 1) {
-        const b = text[pos - 1];
-        if (b >= '0' and b <= '9') {
-            has_digit = true;
-            continue;
-        }
-        // stop when hit non-digit; check if this is 号/號 immediately after digits
-        if ((b == 0xE5 and pos >= 3) or (b == 0xE8 and pos >= 3)) {
-            // rely on matchToken for exact utf-8 token
-        }
-        break;
-    }
-    // Check token "号" or "號" ending at end_pos
-    if (has_digit) {
-        if (end_pos >= "号".len and matchToken(text, end_pos - "号".len, "号")) return true;
-        if (end_pos >= "號".len and matchToken(text, end_pos - "號".len, "號")) return true;
+        const tok = ADMIN[i];
+        if (e >= start + tok.len and matchToken(text, e - tok.len, tok)) return true;
     }
     return false;
 }
@@ -582,18 +834,34 @@ fn findHouseTailFrom(text: []const u8, from_pos: u32, max_lookahead: u32) u32 {
     var i: usize = from_pos;
     const limit = @min(n, from_pos + max_lookahead);
     // scan forward for digits then 号/號
-    while (i < limit and !(text[i] >= '0' and text[i] <= '9')) : (i += 1) {}
+    while (i < limit and !(text[i] >= '0' and text[i] <= '9')) : (i += 1) {
+        if (heavySepAt(text, i) > 0) return from_pos;
+    }
     if (i >= limit) return from_pos;
     var j: usize = i;
     while (j < limit and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
     if (j >= limit) return from_pos;
-    // allow spaces between digits and 号/號
+    // allow spaces between digits and 号/號 or building tokens
     while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+    var ok_head = false;
     if (matchToken(text, j, "号")) {
         j += "号".len;
+        ok_head = true;
     } else if (matchToken(text, j, "號")) {
         j += "號".len;
-    } else return from_pos;
+        ok_head = true;
+    } else {
+        const BUILD = [_][]const u8{ "号楼", "号館", "號樓", "楼", "館", "樓", "栋", "棟", "幢", "座" };
+        var bi: usize = 0;
+        while (bi < BUILD.len) : (bi += 1) {
+            if (matchToken(text, j, BUILD[bi])) {
+                j += BUILD[bi].len;
+                ok_head = true;
+                break;
+            }
+        }
+        if (!ok_head) return from_pos;
+    }
     // optional 之N with spaces around
     var k: usize = j;
     while (k < limit and isAsciiLight(text[k])) : (k += 1) {}
@@ -613,16 +881,96 @@ fn findHouseTailFrom(text: []const u8, from_pos: u32, max_lookahead: u32) u32 {
         while (k < limit and text[k] >= '0' and text[k] <= '9') : (k += 1) {}
         if (k > d1) j = k;
     }
-    // optional unit
-    const UNITS = [_][]const u8{ "楼", "館", "樓", "栋", "棟", "幢", "座", "单元", "室" };
-    for (UNITS) |u| {
-        if (matchToken(text, j, u)) {
-            j += u.len;
-            break;
+    // optional unit / room marker and generic name+number+unit repeats
+    while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+    const rstart = j;
+    while (j < limit and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
+    if (j > rstart) {
+        while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+        const UNITS = [_][]const u8{ "单元", "室", "房", "层", "層" };
+        var ui: usize = 0;
+        while (ui < UNITS.len) : (ui += 1) {
+            if (matchToken(text, j, UNITS[ui])) {
+                j += UNITS[ui].len;
+                break;
+            }
         }
     }
-    return @intCast(j);
+    var loops: u32 = 0;
+    const MAX_EXT2_BYTES: usize = 96;
+    const MAX_EXT2_CHARS: usize = 48;
+    while (loops < 2 and j < limit) : (loops += 1) {
+        if (heavySepAt(text, j) > 0) break;
+        if (detectNextAddressHeadWithin(text, j, 48)) break;
+        if (j > from_pos and (j - from_pos) > MAX_EXT2_BYTES) break;
+        if (countCharsBetween(text, @intCast(from_pos), j) > MAX_EXT2_CHARS) break;
+        while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+        // generic name with length cap (<=16 chars)
+        const MAX_NAME_CHARS2: usize = 16;
+        const name_s = j;
+        var consumed2_chars: usize = 0;
+        while (j < limit and consumed2_chars < MAX_NAME_CHARS2) {
+            if (heavySepAt(text, j) > 0) break;
+            const b = text[j];
+            if (b >= '0' and b <= '9') break;
+            if (isAsciiAlpha(b)) {
+                j += 1;
+                consumed2_chars += 1;
+                continue;
+            }
+            if ((b & 0x80) != 0) {
+                const step = utf8CpLenAt(text, j);
+                j += step;
+                consumed2_chars += 1;
+                continue;
+            }
+            break;
+        }
+        if (j == name_s) break;
+        const name_e = j;
+        const has_poi2 = endsWithPoiSuffix(text, name_s, name_e);
+        while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+        // digits
+        const d2s = j;
+        while (j < limit and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
+        if (j == d2s) break;
+        if (!has_poi2) {
+            const gap2 = d2s - name_e;
+            if (gap2 > 12) break;
+        }
+        while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+        // strong units
+        const U2 = [_][]const u8{ "层", "層", "楼", "号", "號", "号楼", "号館", "號樓", "楼", "館", "樓", "栋", "棟", "幢", "座" };
+        var ok2 = false;
+        var uidx2: usize = 0;
+        while (uidx2 < U2.len) : (uidx2 += 1) {
+            if (matchToken(text, j, U2[uidx2])) {
+                j += U2[uidx2].len;
+                ok2 = true;
+                break;
+            }
+        }
+        if (!ok2) break;
+        // optional room tail
+        while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+        const r2s = j;
+        while (j < limit and text[j] >= '0' and text[j] <= '9') : (j += 1) {}
+        if (j > r2s) {
+            while (j < limit and isAsciiLight(text[j])) : (j += 1) {}
+            const UROOM = [_][]const u8{ "单元", "室", "房" };
+            var ur: usize = 0;
+            while (ur < UROOM.len) : (ur += 1) {
+                if (matchToken(text, j, UROOM[ur])) {
+                    j += UROOM[ur].len;
+                    break;
+                }
+            }
+        }
+    }
+    const new_j = absorbTrailingRoomUnit(text, j);
+    return @intCast(if (new_j > j) new_j else j);
 }
+
 fn leftExtendCnAdmin(text: []const u8, start_pos: u32, max_steps: u32) u32 {
     var start_ext: usize = start_pos;
     var steps: u32 = 0;
@@ -710,6 +1058,12 @@ fn mergeAdjacentAddressSpans(allocator: std.mem.Allocator, text: []const u8, spa
 }
 
 fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans: []const RecogEntity) ![]RecogEntity {
+    for (spans) |span| {
+        if (span.entity_type == .PHYSICAL_ADDRESS) {
+            std.log.debug("[mergeZhAddressSpans] physical address span: {any}, token_text={s}", .{ span, text[span.start..span.end] });
+        }
+    }
+
     const merged_adjacent = try mergeAdjacentAddressSpans(allocator, text, spans);
     defer allocator.free(merged_adjacent);
 
@@ -725,23 +1079,20 @@ fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans: []
         var keep = false;
         var new_end: u32 = sp.end;
 
-        // Case 1: span already includes house tail (e.g., "100号")
-        if (hasHouseTailInside(text, sp.start, sp.end)) {
+        const has_tail_inside = hasHouseTailInside(text, sp.start, sp.end);
+        if (has_tail_inside) keep = true;
+
+        // Always try right-extension from span end to include POI/floor/building tails
+        const ext_end = rightExtendCnAddr(text, sp.end);
+        if (ext_end > new_end) {
             keep = true;
-        } else {
-            // Case 2: can right-extend from end to house tail
-            const ext_end = rightExtendCnAddr(text, sp.end);
-            if (ext_end > sp.end) {
+            new_end = ext_end;
+        } else if (!has_tail_inside and endsWithAdminSuffix(text, sp.start, sp.end)) {
+            // If no internal tail but ends with admin suffix, try grow to the right within a window to house tail
+            const grown_end = findHouseTailFrom(text, sp.end, 96);
+            if (grown_end > new_end) {
                 keep = true;
-                new_end = ext_end;
-            }
-            // Case 3: if current token ends with admin suffix, try grow to the right within a window to house tail
-            else if (endsWithAdminSuffix(text, sp.start, sp.end)) {
-                const grown_end = findHouseTailFrom(text, sp.end, 96);
-                if (grown_end > sp.end) {
-                    keep = true;
-                    new_end = grown_end;
-                }
+                new_end = grown_end;
             }
         }
         if (!keep) continue;

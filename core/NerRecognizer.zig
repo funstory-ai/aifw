@@ -85,10 +85,10 @@ pub fn run(self: *const NerRecognizer, ner_data: NerRecogData) ![]RecogEntity {
                 .start = e.start,
                 .end = e.end,
                 .score = e.score,
-                .description = if (self.ner_recog_type == .token_classification)
-                    "Get from external NER output with token_classification"
-                else
-                    "Get from external NER output with sequence_classification",
+                .description = switch (self.ner_recog_type) {
+                    .token_classification => "token",
+                    .sequence_classification => "sequence",
+                },
             });
         }
     }
@@ -103,7 +103,17 @@ const none_recog_entity = RecogEntity{
     .description = null,
 };
 
-/// Aggregate one or more NerRecogEntity to one RecogEntity
+/// Aggregate one or more same type NerRecogEntity to one RecogEntity
+/// for example, if the NER entities are:
+/// [
+///     { entity_type: .PHYSICAL_ADDRESS, entity_tag: .Begin, start: 0, end: 10, score: 0.9 },
+///     { entity_type: .PHYSICAL_ADDRESS, entity_tag: .Inside, start: 10, end: 20, score: 0.8 },
+///     { entity_type: .PHYSICAL_ADDRESS, entity_tag: .Inside, start: 20, end: 30, score: 0.7 },
+/// ]
+/// the function will return the aggregated RecogEntity:
+/// { entity_type: .PHYSICAL_ADDRESS, start: 0, end: 30, score: 0.8 }
+///
+/// If the NER entities are not the same type, the function will return the first entity.
 fn aggregateNerRecogEntityToRecogEntity(
     text: []const u8,
     pos: *usize,
