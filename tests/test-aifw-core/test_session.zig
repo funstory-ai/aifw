@@ -1,6 +1,8 @@
 const std = @import("std");
 const core = @import("aifw_core");
 
+const Language = core.Language;
+
 pub fn main() !void {
     defer core.aifw_shutdown();
 
@@ -15,10 +17,15 @@ fn test_session_mask_and_restore_with_meta() !void {
     }
     defer core.aifw_session_destroy(session);
 
-    const input1 = "Hi, my email is example.test@funstory.com, my phone number is 13800138027, my name is John Doe";
+    // const input1 = "Hi, my email is example.test@funstory.com, my phone number is 13800138027, my name is John Doe";
+    // const ner_entities1 = [_]core.NerRecognizer.NerRecogEntity{
+    //     .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 14, .start = 86, .end = 90 },
+    //     .{ .entity_type = .USER_MAME, .entity_tag = .Inside, .score = 0.98, .index = 15, .start = 91, .end = 94 },
+    // };
+    const input1 = "我的家庭住址：成都市高新区天府大道100号";
     const ner_entities1 = [_]core.NerRecognizer.NerRecogEntity{
-        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 14, .start = 86, .end = 90 },
-        .{ .entity_type = .USER_MAME, .entity_tag = .Inside, .score = 0.98, .index = 15, .start = 91, .end = 94 },
+        .{ .entity_type = .PHYSICAL_ADDRESS, .entity_tag = .Begin, .score = 0.98, .index = 6, .start = 21, .end = 30 },
+        .{ .entity_type = .PHYSICAL_ADDRESS, .entity_tag = .Begin, .score = 0.98, .index = 16, .start = 51, .end = 57 },
     };
     var masked_text1: [*:0]u8 = undefined;
     var mask_meta_data1: *anyopaque = undefined;
@@ -27,6 +34,7 @@ fn test_session_mask_and_restore_with_meta() !void {
         input1,
         &ner_entities1,
         ner_entities1.len,
+        @intFromEnum(Language.zh),
         &masked_text1,
         &mask_meta_data1,
     );
@@ -47,6 +55,7 @@ fn test_session_mask_and_restore_with_meta() !void {
         input2,
         &ner_entities2,
         ner_entities2.len,
+        @intFromEnum(Language.en),
         &masked_text2,
         &mask_meta_data2,
     );

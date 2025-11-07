@@ -62,6 +62,30 @@ pub const RecogEntity = entity.RecogEntity;
 pub const EntityType = entity.EntityType;
 pub const NerRecogEntity = NerRecognizer.NerRecogEntity;
 
+pub const Language = enum(u8) {
+    unknown = 0,
+    en = 1, // English
+    ja = 2, // Japanese
+    ko = 3, // Korean
+
+    // All zh languages is from 4 to 9, zh is the unified zh language
+    zh = 4, // unified zh language
+    zh_cn = 5, // simplified chinese (mainland china)
+    zh_tw = 6, // traditional chinese (taiwan)
+    zh_hk = 7, // traditional chinese (hong kong)
+    zh_hans = 8, // simplified chinese
+    zh_hant = 9, // traditional chinese
+
+    // All other languages is from 10
+    fr = 10, // French
+    de = 11, // German
+    ru = 12, // Russian
+    es = 13, // Spanish
+    it = 14, // Italian
+    ar = 15, // Arabic
+    pt = 16, // Portuguese
+};
+
 pub const MatchedPIISpan = extern struct {
     /// The entity_id is the id of the PII entity, it's unique within the placeholder_dict.
     entity_id: u32,
@@ -247,6 +271,7 @@ pub const PipelineInitArgs = union(PipelineKind) {
 pub const MaskArgs = struct {
     original_text: [*:0]const u8,
     ner_data: NerRecognizer.NerRecogData, // external NER recognition results
+    language: Language,
 };
 
 pub const RestoreArgs = struct {
@@ -359,13 +384,15 @@ pub const MaskPipeline = struct {
         try merged.appendSlice(self.allocator, ner_ents);
         self.allocator.free(ner_ents);
 
-        // 3.1) Merge zh-address fragments first (NER GPE/FAC/LOC already mapped to PHYSICAL_ADDRESS)
-        const merged_zh_address_spans = try mergeZhAddressSpans(self.allocator, original_text, merged.items);
-        defer self.allocator.free(merged_zh_address_spans);
+        // 3.1) Optional zh-specific address merge
+        const merged_address_spans = switch (args.language) {
+            .zh, .zh_cn, .zh_tw, .zh_hk, .zh_hans, .zh_hant => try mergeZhAddressSpans(self.allocator, original_text, merged.items),
+            else => try self.allocator.dupe(RecogEntity, merged.items),
+        };
+        defer self.allocator.free(merged_address_spans);
 
         // 4) SpanMerger: sort, dedup by range, filter by score >= 0.5
-        const spans = merged_zh_address_spans;
-        // defer self.allocator.free(spans);
+        const spans = merged_address_spans;
         std.log.debug("[mask] spans before sort/filter: {d}", .{spans.len});
         std.sort.block(RecogEntity, spans, {}, struct {
             fn lessThan(_: void, a: RecogEntity, b: RecogEntity) bool {
@@ -938,7 +965,7 @@ pub const Session = struct {
         };
     }
 
-    pub fn mask_and_out_meta(self: *Session, text: [*:0]const u8, ner_entities: []const NerRecogEntity, out_mask_meta_data: **anyopaque) ![*:0]u8 {
+    pub fn mask_and_out_meta(self: *Session, text: [*:0]const u8, ner_entities: []const NerRecogEntity, language: Language, out_mask_meta_data: **anyopaque) ![*:0]u8 {
         const mask_result = (try self.getPipeline(.mask).run(.{ .mask = .{
             .original_text = text,
             .ner_data = .{
@@ -946,6 +973,7 @@ pub const Session = struct {
                 .ner_entities = ner_entities.ptr,
                 .ner_entity_count = @intCast(ner_entities.len),
             },
+            .language = language,
         } })).mask;
         const serialized_mask_meta_data = try serialize_mask_meta_data(self.allocator, mask_result.mask_meta_data);
         out_mask_meta_data.* = @alignCast(@as(*anyopaque, @ptrCast(serialized_mask_meta_data.ptr)));
@@ -957,7 +985,7 @@ pub const Session = struct {
     /// The matched_start and matched_end is index in parameter text. So you must
     /// keep alive the parameter text when you use the returned PII spans.
     /// You must free the returned PII spans when you no longer using it.
-    pub fn get_pii_spans(self: *Session, text: [*:0]const u8, ner_entities: []const NerRecogEntity) ![]const MatchedPIISpan {
+    pub fn get_pii_spans(self: *Session, text: [*:0]const u8, ner_entities: []const NerRecogEntity, language: Language) ![]const MatchedPIISpan {
         const mask_result = (try self.getPipeline(.mask).run(.{ .mask = .{
             .original_text = text,
             .ner_data = .{
@@ -965,6 +993,7 @@ pub const Session = struct {
                 .ner_entities = ner_entities.ptr,
                 .ner_entity_count = @intCast(ner_entities.len),
             },
+            .language = language,
         } })).mask;
         // Avoid leaking masked_text from the mask path; caller will free spans.
         self.allocator.free(std.mem.span(mask_result.masked_text));
@@ -1003,7 +1032,7 @@ test "session mask/restore with meta" {
     };
 
     var out_meta_ptr: *anyopaque = undefined;
-    const masked_text = try session.mask_and_out_meta(input, &ner_entities, &out_meta_ptr);
+    const masked_text = try session.mask_and_out_meta(input, &ner_entities, .en, &out_meta_ptr);
     defer allocator.free(std.mem.span(masked_text));
 
     // Copy out meta BEFORE first restore because restore_with_meta frees the out_meta_ptr
@@ -1052,7 +1081,7 @@ test "regex recognizer in mask/restore" {
     const ner_entities = [_]NerRecogEntity{};
 
     var out_meta_ptr: *anyopaque = undefined;
-    const masked_text = try session.mask_and_out_meta(input, &ner_entities, &out_meta_ptr);
+    const masked_text = try session.mask_and_out_meta(input, &ner_entities, .en, &out_meta_ptr);
     defer allocator.free(std.mem.span(masked_text));
 
     const restored_text = try session.restore_with_meta(masked_text, out_meta_ptr);
@@ -1079,7 +1108,7 @@ test "session restore_with_meta with empty masked text frees meta and returns nu
     };
 
     var out_meta_ptr: *anyopaque = undefined;
-    const masked_text = try session.mask_and_out_meta(input, &ner_entities, &out_meta_ptr);
+    const masked_text = try session.mask_and_out_meta(input, &ner_entities, .en, &out_meta_ptr);
     defer allocator.free(std.mem.span(masked_text));
 
     // Call exported C API restore_with_meta with empty masked text
@@ -1111,7 +1140,7 @@ test "session get PII spans" {
         .{ .entity_id = 2, .entity_type = .URL_ADDRESS, .matched_start = 36, .matched_end = 56 },
         .{ .entity_id = 3, .entity_type = .USER_MAME, .matched_start = 68, .matched_end = 77 },
     };
-    const pii_spans = try session.get_pii_spans(input, &ner_entities);
+    const pii_spans = try session.get_pii_spans(input, &ner_entities, .en);
     defer allocator.free(pii_spans);
     try std.testing.expectEqualSlices(MatchedPIISpan, expected_pii_spans, pii_spans);
 }
@@ -1201,6 +1230,7 @@ pub export fn aifw_session_mask_and_out_meta(
     c_text: [*:0]const u8,
     ner_entities: [*c]const NerRecogEntity,
     ner_entity_count: u32,
+    language: u8,
     out_masked_text: *[*:0]u8,
     out_mask_meta_data: **anyopaque,
 ) u16 {
@@ -1212,7 +1242,7 @@ pub export fn aifw_session_mask_and_out_meta(
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
     const ner_entities_slice = if (ner_entity_count > 0) ner_entities[0..@intCast(ner_entity_count)] else &[_]NerRecogEntity{};
-    const masked_text = session.mask_and_out_meta(c_text, ner_entities_slice, out_mask_meta_data) catch |err| {
+    const masked_text = session.mask_and_out_meta(c_text, ner_entities_slice, @enumFromInt(language), out_mask_meta_data) catch |err| {
         std.log.err("[c-api] mask_and_out_meta failed: {s}", .{@errorName(err)});
         return @intFromError(err);
     };
@@ -1230,6 +1260,7 @@ pub export fn aifw_session_get_pii_spans(
     c_text: [*:0]const u8,
     ner_entities: [*c]const NerRecogEntity,
     ner_entity_count: u32,
+    language: u8,
     out_pii_spans: *[*c]const MatchedPIISpan,
     out_pii_spans_count: *u32,
 ) u16 {
@@ -1241,7 +1272,7 @@ pub export fn aifw_session_get_pii_spans(
 
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
     const ner_entities_slice = if (ner_entity_count > 0) ner_entities[0..@intCast(ner_entity_count)] else &[_]NerRecogEntity{};
-    const matched_pii_spans = session.get_pii_spans(c_text, ner_entities_slice) catch |err| {
+    const matched_pii_spans = session.get_pii_spans(c_text, ner_entities_slice, @enumFromInt(language)) catch |err| {
         std.log.err("[c-api] get_matched_pii_list failed: {s}", .{@errorName(err)});
         return @intFromError(err);
     };

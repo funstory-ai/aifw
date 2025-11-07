@@ -328,7 +328,27 @@ export async function maskText(inputText, language) {
 
     outMaskedPtrPtr = wasm.aifw_malloc(4);
     outMaskMetaPtrPtr = wasm.aifw_malloc(4);
-    const rcMask = wasm.aifw_session_mask_and_out_meta(session.handle, zigInputText.ptr, nerBuf.ptr, nerBuf.count >>> 0, outMaskedPtrPtr, outMaskMetaPtrPtr);
+    const langEnum = (() => {
+      const l = String(langToUse || '').toLowerCase();
+      if (l.startsWith('en')) return 1; // Language.en
+      if (l.startsWith('ja')) return 2; // Language.ja
+      if (l.startsWith('ko')) return 3; // Language.ko
+      if (l === 'zh') return 4; // Language.zh
+      if (l === 'zh-cn') return 5; // Language.zh_cn
+      if (l === 'zh-tw') return 6; // Language.zh_tw
+      if (l === 'zh-hk') return 7; // Language.zh_hk
+      if (l === 'zh-hans') return 8; // Language.zh_hans
+      if (l === 'zh-hant') return 9; // Language.zh_hant
+      if (l.startsWith('fr')) return 10; // Language.fr
+      if (l.startsWith('de')) return 11; // Language.de
+      if (l.startsWith('ru')) return 12; // Language.ru
+      if (l.startsWith('es')) return 13; // Language.es
+      if (l.startsWith('it')) return 14; // Language.it
+      if (l.startsWith('ar')) return 15; // Language.ar
+      if (l.startsWith('pt')) return 16; // Language.pt
+      return 0; // Unknown
+    })();
+    const rcMask = wasm.aifw_session_mask_and_out_meta(session.handle, zigInputText.ptr, nerBuf.ptr, nerBuf.count >>> 0, langEnum >>> 0, outMaskedPtrPtr, outMaskMetaPtrPtr);
     if (rcMask !== 0) throw new Error(`mask failed rc=${rcMask}`);
     const maskedPtr = new DataView(wasm.memory.buffer).getUint32(outMaskedPtrPtr, true);
     const maskedStr = readZigStr(maskedPtr);
@@ -434,7 +454,13 @@ export async function getPiiSpans(inputText, language) {
 
     outSpansPtrPtr = wasm.aifw_malloc(4);
     outCountPtr = wasm.aifw_malloc(4);
-    const rc = wasm.aifw_session_get_pii_spans(session.handle, zigInputText.ptr, nerBuf.ptr, nerBuf.count >>> 0, outSpansPtrPtr, outCountPtr);
+    const langEnum = (() => {
+      const l = String(langToUse || '').toLowerCase();
+      if (l.startsWith('zh')) return 1; // Language.ZH
+      if (l.startsWith('en')) return 2; // Language.EN
+      return 0; // Unknown
+    })();
+    const rc = wasm.aifw_session_get_pii_spans(session.handle, zigInputText.ptr, nerBuf.ptr, nerBuf.count >>> 0, langEnum >>> 0, outSpansPtrPtr, outCountPtr);
     if (rc !== 0) throw new Error(`get_pii_spans failed rc=${rc}`);
     const dv = new DataView(wasm.memory.buffer);
     const spansPtr = dv.getUint32(outSpansPtrPtr, true);
