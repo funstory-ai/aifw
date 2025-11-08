@@ -49,6 +49,10 @@ High‑level architecture (overview):
 - Zig 0.15.1
 - Rust toolchain (stable) + Cargo
   - `rustup target add wasm32-unknown-unknown`
+- llvm tools: llvm-ar
+  - Install llvm
+  - Or add symbol link from the LLVM that is required when installing using Zig
+      * In macOS: `ln -s $(brew --prefix llvm@20)/bin/llvm-ar /usr/local/bin/llvm-ar`
 - Node.js 18+ and pnpm 9+
   - Install pnpm: `npm i -g pnpm`
 - Python 3.10+ (for `py-origin` backend) and pip/venv
