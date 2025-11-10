@@ -123,13 +123,6 @@ function main() {
   
   // Always copy core WASM
   copyCoreWasm(outRoot)
-  
-  // Skip models if AIFW_SKIP_MODELS is set
-  if (!process.env.AIFW_SKIP_MODELS) {
-    copyModels(outRoot)
-  } else {
-    console.log('[skip] NER model files (AIFW_SKIP_MODELS is set)')
-  }
 }
 
 main()
