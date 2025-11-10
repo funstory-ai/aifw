@@ -10,7 +10,7 @@ const is_freestanding = builtin.target.os.tag == .freestanding;
 // When targeting wasm32-freestanding, route std.log to an extern JS-provided logger.
 // Otherwise, use Zig's default logger.
 pub const std_options = std.Options{
-    .log_level = .info,
+    .log_level = .debug,
     .logFn = logFn,
 };
 
@@ -422,7 +422,7 @@ pub const MaskPipeline = struct {
         std.log.debug("[mask] filtered spans: {d}", .{filtered_spans.len});
 
         // 4.1) De-duplicate overlapping spans by priority (higher score, longer span, earlier start)
-        const final_spans = try dedupOverlappingSpans(self.allocator, filtered_spans);
+        const final_spans = try dedupOverlappingSpans(self.allocator, filtered_spans, original_text);
         defer self.allocator.free(final_spans);
         std.log.debug("[mask] final spans after dedup: {d}", .{final_spans.len});
 
@@ -518,6 +518,22 @@ fn roadSuffixAt(text: []const u8, pos: usize) usize {
         if (matchToken(text, pos, SUF[i])) return SUF[i].len;
     }
     return 0;
+}
+
+fn endsWithRoadSuffix(text: []const u8, start: u32, end: u32) bool {
+    if (end <= start) return false;
+    var e: usize = end;
+    while (e > start and isAsciiLight(text[e - 1])) : (e -= 1) {}
+    const SUF = [_][]const u8{
+        "大道", "大街", "环路", "环线", "路", "街", "巷", "弄", "里", "道", "胡同", "段", "期",
+        "環路", "環線",
+    };
+    var i: usize = 0;
+    while (i < SUF.len) : (i += 1) {
+        const t = SUF[i];
+        if (e >= start + t.len and matchToken(text, e - t.len, t)) return true;
+    }
+    return false;
 }
 
 fn endsWithAny(text: []const u8, start: usize, end: usize, toks: []const []const u8) bool {
@@ -829,6 +845,48 @@ fn endsWithAdminSuffix(text: []const u8, start: u32, end: u32) bool {
     return false;
 }
 
+fn utf8PrevCpStart(text: []const u8, pos: usize) usize {
+    if (pos == 0) return 0;
+    var p = pos - 1;
+    while (p > 0 and (text[p] & 0xC0) == 0x80) : (p -= 1) {}
+    return p;
+}
+
+fn prevIsAdminSuffix(text: []const u8, pos: usize) bool {
+    // check if any admin suffix ends exactly at pos
+    const ADMIN = [_][]const u8{
+        "省", "市", "自治州", "自治区", "州", "盟", "地区", "特别行政区", "区", "區", "县", "縣", "旗", "新区", "高新区", "经济技术开发区", "开发区", "街道", "镇", "鎮", "乡", "鄉", "里", "村",
+    };
+    var i: usize = 0;
+    while (i < ADMIN.len) : (i += 1) {
+        const t = ADMIN[i];
+        if (pos >= t.len and matchToken(text, pos - t.len, t)) return true;
+    }
+    return false;
+}
+
+fn leftExtendCnRoadHead(text: []const u8, start_pos: u32, max_bytes: usize) u32 {
+    var p: usize = start_pos;
+    var consumed: usize = 0;
+    while (p > 0 and consumed < max_bytes) {
+        const prev = utf8PrevCpStart(text, p);
+        if (heavySepAt(text, prev) > 0) break;
+        const b = text[prev];
+        // stop at digits
+        if (b >= '0' and b <= '9') break;
+        // stop if immediately preceded by an admin suffix
+        if (prevIsAdminSuffix(text, prev)) break;
+        // accept ASCII letters or non-ASCII codepoints
+        if (isAsciiAlpha(b) or (b & 0x80) != 0) {
+            consumed += (p - prev);
+            p = prev;
+            continue;
+        }
+        break;
+    }
+    return @intCast(p);
+}
+
 fn findHouseTailFrom(text: []const u8, from_pos: u32, max_lookahead: u32) u32 {
     const n = text.len;
     var i: usize = from_pos;
@@ -1097,6 +1155,10 @@ fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans: []
         }
         if (!keep) continue;
 
+        // // first include road head chunk (e.g., "银城" in "银城中路")
+        // const road_start = if (endsWithRoadSuffix(text, sp.start, sp.end)) leftExtendCnRoadHead(text, sp.start, 32) else sp.start;
+        // // then include upper administrative units if adjacent
+        // const new_start = leftExtendCnAdmin(text, road_start, 3);
         const new_start = leftExtendCnAdmin(text, sp.start, 3);
         var out_sp = sp;
         out_sp.start = new_start;
@@ -1107,14 +1169,31 @@ fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans: []
     return try merged_zh.toOwnedSlice(allocator);
 }
 
-fn dedupOverlappingSpans(allocator: std.mem.Allocator, spans: []const RecogEntity) ![]RecogEntity {
+fn dedupOverlappingSpans(allocator: std.mem.Allocator, spans: []const RecogEntity, text: []const u8) ![]RecogEntity {
     if (spans.len == 0) return allocator.alloc(RecogEntity, 0);
 
     // copy spans for sorting by priority: higher score, longer length, earlier start
     const dup_spans = try allocator.dupe(RecogEntity, spans);
     errdefer allocator.free(dup_spans);
-    std.sort.block(RecogEntity, dup_spans, {}, struct {
-        fn lessThan(_: void, a: RecogEntity, b: RecogEntity) bool {
+    const Ctx = struct { text: []const u8 };
+    std.sort.block(RecogEntity, dup_spans, Ctx{ .text = text }, struct {
+        fn hasHouse(t: []const u8, s: RecogEntity) bool {
+            return if (s.entity_type == .PHYSICAL_ADDRESS) hasHouseTailInside(t, s.start, s.end) else false;
+        }
+        fn lessThan(ctx: Ctx, a: RecogEntity, b: RecogEntity) bool {
+            // For PHYSICAL_ADDRESS, prefer has house, longer first, then earlier start, then higher score
+            if (a.entity_type == .PHYSICAL_ADDRESS or b.entity_type == .PHYSICAL_ADDRESS) {
+                const ah = hasHouse(ctx.text, a);
+                const bh = hasHouse(ctx.text, b);
+                if (ah != bh) return ah and !bh; // with house-tail first
+                const a_len = a.end - a.start;
+                const b_len = b.end - b.start;
+                if (a_len != b_len) return a_len > b_len;
+                if (a.start != b.start) return a.start < b.start;
+                if (a.score != b.score) return a.score > b.score;
+                return a.start < b.start;
+            }
+            // Default: higher score, then longer length, then earlier start
             if (a.score != b.score) return a.score > b.score; // higher first
             const a_len = a.end - a.start;
             const b_len = b.end - b.start;
