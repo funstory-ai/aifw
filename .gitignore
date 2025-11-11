@@ -11,6 +11,8 @@ __pycache__
 zig-out
 target
 
+ner-models
+
 package-lock.json
 pnpm-lock.yaml
 node_modules
