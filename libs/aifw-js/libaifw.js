@@ -292,10 +292,10 @@ function selectNer(language) {
   const lang = String(language || '').toLowerCase();
   // Treat zh, zh-cn, zh-tw, zh-hans, zh-hant as Chinese
   if (lang === 'zh' || lang.startsWith('zh-')) {
-    console.log('select zh NER pipeline.');
+    console.log('[aifw-js] select zh NER pipeline.');
     return nerPipelines.zh || nerPipelines.default;
   }
-  console.log('select en NER pipeline.', nerPipelines.default);
+  console.log('[aifw-js] select en NER pipeline.', nerPipelines.default);
   return nerPipelines.default;
 }
 

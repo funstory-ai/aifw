@@ -72,6 +72,11 @@ pub fn run(self: *const NerRecognizer, ner_data: NerRecogData) ![]RecogEntity {
     var pos: usize = 0;
     var idx: usize = 0;
     std.log.debug("NerRecognizer.run: ner_data.ner_entity_count={d}", .{ner_data.ner_entity_count});
+    if (@intFromEnum(std.options.log_level) >= @intFromEnum(std.log.Level.debug)) {
+        for (ner_data.ner_entities[0..ner_data.ner_entity_count]) |ent| {
+            std.log.debug("NerRecognizer.run: ner ent: {any}", .{ent});
+        }
+    }
     var out = try std.ArrayList(RecogEntity).initCapacity(self.allocator, ner_data.ner_entity_count);
     defer out.deinit(self.allocator);
     const text = std.mem.span(ner_data.text);
