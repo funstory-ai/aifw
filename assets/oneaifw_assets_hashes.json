@@ -1,0 +1,16 @@
+{
+  "models": {
+    "ckiplab/bert-tiny-chinese-ner": {
+      "onnx/model_quantized.onnx": "0x0d723d495d0365236e12e51abbcb97407e8d1f51ec3154656e9267de31fc9ce6"
+    },
+    "funstory-ai/neurobert-mini": {
+      "onnx/model_quantized.onnx": "0xa7c4bfc5e2b7cfdfce2012b38e6eca712b433c4ed47ffc973ee9e3964056834a"
+    }
+  },
+  "source": "/Users/liuchangsheng/Work/funstory-ai/OneAIFW-Assets",
+  "version": "0.3.1",
+  "wasm": {
+    "ort-wasm-simd-threaded.wasm": "0x74ccfd137d5b3ae7bcc2e951e2418078abfa58cf444f69502efb7bc52d6c12d4",
+    "ort-wasm-simd.wasm": "0x0c1482593eb573d11e6e6c5539cf5436a323e4d49b843135317f053ab0523277"
+  }
+}

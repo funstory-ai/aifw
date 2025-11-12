@@ -114,13 +114,10 @@ function main() {
   const outRoot = path.resolve(__dirname, '..', 'dist')
   ensureDir(outRoot)
   
-  // Skip ORT WASM if AIFW_SKIP_ORT_WASM is set
-  if (!process.env.AIFW_SKIP_ORT_WASM) {
-    copyTransformersWasm(outRoot)
-  } else {
-    console.log('[skip] ORT WASM files (AIFW_SKIP_ORT_WASM is set)')
-  }
-  
+  // Skip copy ORT WASM and models, because they will be downloaded from Huggingface at runtime
+  // copyTransformersWasm(outRoot)
+  // copyModels(outRoot)
+
   // Always copy core WASM
   copyCoreWasm(outRoot)
 }

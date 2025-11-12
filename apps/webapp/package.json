@@ -11,7 +11,8 @@
     "serve:coi": "node scripts/serve-coi.mjs"
   },
   "dependencies": {
-    "@oneaifw/aifw-js": "workspace:*"
+    "@oneaifw/aifw-js": "workspace:*",
+    "js-sha3": "^0.9.3"
   },
   "devDependencies": {
     "vite": "^7.1.6"

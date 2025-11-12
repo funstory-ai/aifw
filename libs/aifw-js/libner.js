@@ -3,14 +3,17 @@ import * as Transformers from '@xenova/transformers';
 
 let MODELS_BASE = '';
 
-export function initEnv({ wasmBase = '/wasm/', modelsBase = '', threads, simd } = {}) {
+export function initEnv({ wasmBase = '/wasm/', modelsBase = '', threads, simd, fetchFn } = {}) {
   env.allowLocalModels = true;
   env.useBrowserCache = true;
   env.backends.onnx.wasm.wasmPaths = wasmBase;
   MODELS_BASE = modelsBase || '';
   if (MODELS_BASE) {
-    const m = MODELS_BASE.endsWith('/') ? MODELS_BASE.slice(0, -1) : MODELS_BASE;
-    env.localModelPath = m; // transformers will fetch from `${env.localModelPath}/${modelId}/...`
+    const modelsBase = MODELS_BASE.endsWith('/') ? MODELS_BASE.slice(0, -1) : MODELS_BASE;
+    env.localModelPath = modelsBase; // transformers will fetch from `${env.localModelPath}/${modelId}/...`
+  }
+  if (typeof fetchFn === 'function') {
+    env.fetch = fetchFn;
   }
   if (typeof threads === 'number' && threads > 0) env.backends.onnx.wasm.numThreads = threads;
   if (typeof simd === 'boolean') env.backends.onnx.wasm.simd = simd;

@@ -59,7 +59,8 @@ let aifw; // wrapper lib
 async function main() {
   statusEl.textContent = 'Initializing AIFW...';
   aifw = await import('@oneaifw/aifw-js');
-  await aifw.init({ wasmBase: './wasm/' });
+  // await aifw.init({ wasmBase: './wasm/' });
+  await aifw.init();
   statusEl.textContent = 'AIFW initialized.';
 
   // graceful shutdown on page exit (bfcache + unload)

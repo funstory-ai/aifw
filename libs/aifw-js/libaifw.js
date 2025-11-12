@@ -6,6 +6,8 @@ let nerPipelines = {
   zh: null,
 };
 
+import { sha3_256 as sha3_256_fn } from 'js-sha3';
+
 // Lazy OpenCC converters (Simplified <-> Traditional)
 let openccConverters = { s2t: null, t2s: null };
 // Small LRU caches for conversions to avoid repeated s2t/t2s on same text
@@ -190,7 +192,7 @@ function freeBuf(ptr, size) {
   wasm.aifw_free_sized(ptr, size);
 }
 
-async function loadAifwCore(wasmBase) {
+async function loadAifwCore() {
   const imports = {
     env: {
       js_log(level, ptr, len) {
@@ -204,13 +206,7 @@ async function loadAifwCore(wasmBase) {
       },
     },
   };
-  let urlStr;
-  if (wasmBase) {
-    const base = wasmBase.endsWith('/') ? wasmBase : wasmBase + '/';
-    urlStr = base + 'liboneaifw_core.wasm';
-  } else {
-    urlStr = new URL(/* @vite-ignore */ './wasm/liboneaifw_core.wasm', import.meta.url).toString();
-  }
+  const urlStr = new URL(/* @vite-ignore */ './wasm/liboneaifw_core.wasm', import.meta.url).toString();
   // cache-bust to avoid stale core wasm in extension/webapp
   const bust = (urlStr.includes('?') ? '&' : '?') + 'v=' + Date.now();
   const resp = await fetch(urlStr + bust, { cache: 'no-store' });
@@ -224,19 +220,219 @@ async function loadAifwCore(wasmBase) {
   return wasm_exports;
 }
 
-export async function init({ wasmBase = '/wasm/', modelsBase = '/models/' }) {
-  // load aifw core wasm library
-  wasm = await loadAifwCore(wasmBase);
+const ASSETS_BASE_MANAGED_GITHUB = 'https://raw.githubusercontent.com/funstory-ai/OneAIFW-Assets/main/';
+const ASSETS_BASE_MANAGED_HF = 'https://huggingface.co/immersiveL/OneAIFW-Assets/resolve/main/';
+const ASSETS_BASE_MANAGED_MODEL_SCOPE = 'https://www.modelscope.cn/models/awwaawwa/OneAIFW-Assets/files/';
+
+const OneAIFW_ASSETS_VERSION = '0.3.1';
+
+const DEFAULT_MODELS_SUBDIR = 'models/';
+const DEFAULT_OVERALL_MODE = 'managed';
+const DEFAULT_MODELS_MODE = 'managed';
+const DEFAULT_ORT_MODE = 'managed';
+
+const DEFAULT_EN_MODEL_ID = 'funstory-ai/neurobert-mini';
+const EN_MODEL_SHA3_256 = '0xa7c4bfc5e2b7cfdfce2012b38e6eca712b433c4ed47ffc973ee9e3964056834a';
+const DEFAULT_ZH_MODEL_ID = 'ckiplab/bert-tiny-chinese-ner';
+const ZH_MODEL_SHA3_256 = '0x0d723d495d0365236e12e51abbcb97407e8d1f51ec3154656e9267de31fc9ce6';
+
+const DEFAULT_WASM_SUBDIR = 'wasm/';
+const DEFAULT_ORT_NAME = 'ort-wasm-simd.wasm';
+const DEFAULT_THREADS = 1;
+const DEFAULT_SIMD = true;
+const ORT_WASM_SHA3_256 = '0x0c1482593eb573d11e6e6c5539cf5436a323e4d49b843135317f053ab0523277';
+
+function compareVersion(a, b) {
+  const pa = String(a || '').split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = String(b || '').split('.').map((x) => parseInt(x, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const va = pa[i] || 0;
+    const vb = pb[i] || 0;
+    if (va > vb) return 1;
+    if (va < vb) return -1;
+  }
+  return 0;
+}
+
+async function computeSha3_256Hex(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : (buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer));
+  const hasher = sha3_256_fn.create();
+  hasher.update(bytes);
+  const hex = hasher.hex();
+  return '0x' + hex;
+}
+
+async function fetchWithCache(url, cacheName) {
+  try {
+    if (typeof caches !== 'undefined' && caches?.open) {
+      const cache = await caches.open(cacheName);
+      let resp = await cache.match(url);
+      if (resp && resp.ok) return resp.clone();
+      resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`fetch ${url} failed: ${resp.status}`);
+      await cache.put(url, resp.clone());
+      return resp.clone();
+    }
+  } catch (e) {
+    console.warn('[aifw-js] CacheStorage not available or failed, fallback to network', e);
+  }
+  const resp = await fetch(url, { cache: 'no-store' });
+  if (!resp.ok) throw new Error(`fetch ${url} failed: ${resp.status}`);
+  return resp;
+}
+
+async function ensureManagedAssetsAvailable({ assetsBase, enModelId, zhModelId, ortName }) {
+  const helloUrl = assetsBase + 'hello.json';
+  const helloResp = await fetchWithCache(helloUrl, 'oneaifw-assets');
+  const hello = await helloResp.json().catch(() => ({}));
+  const remoteVersion = String(hello?.version || '');
+  if (!remoteVersion) throw new Error('[aifw-js] invalid assets source: missing version in hello.json');
+  if (compareVersion(OneAIFW_ASSETS_VERSION, remoteVersion) > 0) {
+    throw new Error(`[aifw-js] assets version too old: required<=${OneAIFW_ASSETS_VERSION}, got ${remoteVersion}`);
+  }
+  const cacheName = `oneaifw-assets-v${remoteVersion}`;
+
+  // Validate EN model
+  const enOnnxUrl = assetsBase + `${DEFAULT_MODELS_SUBDIR}${enModelId}/onnx/model_quantized.onnx`;
+  const enOnnxResp = await fetchWithCache(enOnnxUrl, cacheName);
+  const enOnnxBuf = await enOnnxResp.arrayBuffer();
+  const enHash = await computeSha3_256Hex(enOnnxBuf);
+  if (EN_MODEL_SHA3_256 && enHash.toLowerCase() !== EN_MODEL_SHA3_256.toLowerCase()) {
+    throw new Error(`[aifw-js] EN model hash mismatch: got ${enHash}, expected ${EN_MODEL_SHA3_256}`);
+  }
+
+  // Validate ZH model
+  const zhOnnxUrl = assetsBase + `${DEFAULT_MODELS_SUBDIR}${zhModelId}/onnx/model_quantized.onnx`;
+  const zhOnnxResp = await fetchWithCache(zhOnnxUrl, cacheName);
+  const zhOnnxBuf = await zhOnnxResp.arrayBuffer();
+  const zhHash = await computeSha3_256Hex(zhOnnxBuf);
+  if (ZH_MODEL_SHA3_256 && zhHash.toLowerCase() !== ZH_MODEL_SHA3_256.toLowerCase()) {
+    throw new Error(`[aifw-js] ZH model hash mismatch: got ${zhHash}, expected ${ZH_MODEL_SHA3_256}`);
+  }
+
+  // Validate ORT wasm
+  const ortUrl = assetsBase + `${DEFAULT_WASM_SUBDIR}${ortName}`;
+  const ortResp = await fetchWithCache(ortUrl, cacheName);
+  const ortBuf = await ortResp.arrayBuffer();
+  const ortHash = await computeSha3_256Hex(ortBuf);
+  if (ORT_WASM_SHA3_256 && ortHash.toLowerCase() !== ORT_WASM_SHA3_256.toLowerCase()) {
+    throw new Error(`[aifw-js] ORT wasm hash mismatch: got ${ortHash}, expected ${ORT_WASM_SHA3_256}`);
+  }
+
+  return { remoteVersion, cacheName };
+}
+
+async function pickFastestAssetsBase() {
+  const candidates = [
+    ASSETS_BASE_MANAGED_HF,
+    ASSETS_BASE_MANAGED_GITHUB,
+    ASSETS_BASE_MANAGED_MODEL_SCOPE,
+  ];
+  const tasks = candidates.map((base) => (async () => {
+    const url = base + 'hello.json';
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`hello.json not ok from ${url}: ${r.status}`);
+    await r.json().catch(() => { throw new Error(`invalid hello.json from ${url}`); });
+    return base;
+  })());
+  try {
+    return await Promise.any(tasks);
+  } catch (_) {
+    throw new Error('[aifw-js] all managed asset sources failed for hello.json');
+  }
+}
+
+export async function init(options = {}) {
+  // Backward compatibility: map legacy options to new structure
+  // Legacy: { wasmBase, modelsBase }
+  let legacyWasmBase = options.wasmBase;
+  let legacyModelsBase = options.modelsBase;
+
+  // New options (modes can be chosen separately per resource group)
+  // {
+  //   mode?: 'managed' | 'customize',
+  //   models?: { mode?: 'managed'|'customize', modelsBase?: string, enModelId?: string, zhModelId?: string },
+  //   ort?: { mode?: 'managed'|'customize', wasmBase?: string, ortName?: string, threads?: number, simd?: boolean }
+  // }
+  const overallMode = options.mode || DEFAULT_OVERALL_MODE;
+  const modelsCfg = options.models || { mode: DEFAULT_MODELS_MODE };
+  const ortCfg = options.ort || { mode: DEFAULT_ORT_MODE };
+
+  if (overallMode === 'managed' && (legacyWasmBase || legacyModelsBase)) {
+    console.warn('[aifw-js] mode=managed is not compatible with legacy wasmBase or modelsBase, ignoring legacy settings.');
+    legacyWasmBase = undefined;
+    legacyModelsBase = undefined;
+  }
+  if (overallMode === 'managed' && (modelsCfg.mode === 'customize' || ortCfg.mode === 'customize')) {
+    console.warn('[aifw-js] mode=managed is not compatible with customize mode, ignoring customize settings.');
+    modelsCfg.mode = 'managed';
+    ortCfg.mode = 'managed';
+  }
+
+  // Determine effective modes
+  const modelsMode = modelsCfg.mode || overallMode || (legacyModelsBase ? 'customize' : 'managed');
+  const ortMode = ortCfg.mode || overallMode || (legacyWasmBase ? 'customize' : 'managed');
+
+  // Derive effective paths/settings
+  // ORT runtime wasm base (onnxruntime-web wasm files)
+  let ortWasmBase = ortCfg.wasmBase;
+  const ortName = ortMode === 'managed' ? DEFAULT_ORT_NAME : (ortCfg.ortName || DEFAULT_ORT_NAME);
+  const threads = ortMode === 'managed' ? DEFAULT_THREADS : (ortCfg.threads || DEFAULT_THREADS);
+  const simd = ortMode === 'managed' ? DEFAULT_SIMD : (ortCfg.simd || DEFAULT_SIMD);
+
+  // Validate customize wasm base for ORT
+  if (ortMode === 'customize' && !ortWasmBase) {
+    throw new Error('[aifw-js] ort.mode=customize requires ort.wasmBase');
+  }
+
+  // Models base directory (used for local/customize)
+  let modelsBase = modelsCfg.modelsBase;
+  const enModelId = modelsMode === 'managed' ? DEFAULT_EN_MODEL_ID : (modelsCfg.enModelId || DEFAULT_EN_MODEL_ID);
+  const zhModelId = modelsMode === 'managed' ? DEFAULT_ZH_MODEL_ID : (modelsCfg.zhModelId || DEFAULT_ZH_MODEL_ID);
+
+  // Validate customize models base for NER
+  if (modelsMode === 'customize' && !modelsBase) {
+    throw new Error('[aifw-js] models.mode=customize requires models.modelsBase');
+  }
+
+  let cacheNameForFetch = null;
+  if (modelsMode === 'managed' || ortMode === 'managed') {
+    const assetsBase = await pickFastestAssetsBase();
+    if (modelsMode === 'managed') modelsBase = assetsBase + DEFAULT_MODELS_SUBDIR;
+    if (ortMode === 'managed') ortWasmBase = assetsBase + DEFAULT_WASM_SUBDIR;
+    const { cacheName } = await ensureManagedAssetsAvailable({
+      assetsBase,
+      enModelId,
+      zhModelId,
+      ortName,
+    });
+    cacheNameForFetch = cacheName;
+  }
+
+  console.info('[aifw-js] modelsBase:', modelsBase);
+  console.info('[aifw-js] ortWasmBase:', ortWasmBase);
+  console.info('[aifw-js] cacheNameForFetch:', cacheNameForFetch);
+
+  // Load aifw core wasm library (separate from ORT wasm)
+  wasm = await loadAifwCore();
   // load NER lib and pipeline (relative import for packaged lib)
   nerLib = await import('./libner.js');
 
-  // Force SIMD on, and set threads from hardwareConcurrency (>=1)
-  const threads = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) ? Math.max(1, navigator.hardwareConcurrency) : 1;
-  nerLib.initEnv({ wasmBase, modelsBase, threads, simd: true });
+  // Initialize NER/Transformers env for ORT and models
+  // default mode: do not set explicit paths (let library/CDN manage)
+  // local/customize: user-managed paths
+  const initEnvArgs = {};
+  initEnvArgs.wasmBase = ortWasmBase;
+  initEnvArgs.modelsBase = modelsBase;
+  initEnvArgs.threads = threads;
+  initEnvArgs.simd = simd;
+  if (cacheNameForFetch) {
+    initEnvArgs.fetchFn = (url, opts) => fetchWithCache(url, cacheNameForFetch);
+  }
+  nerLib.initEnv(initEnvArgs);
 
   // Preload NER pipelines for EN(default) and ZH
-  const enModelId = 'funstory-ai/neurobert-mini';
-  const zhModelId = 'ckiplab/bert-tiny-chinese-ner';
   const [enPipe, zhPipe] = await Promise.all([
     nerLib.buildNerPipeline(enModelId, { quantized: true }).catch((e) => { console.warn('load EN model failed', e); return null; }),
     nerLib.buildNerPipeline(zhModelId, { quantized: true }).catch((e) => { console.warn('load ZH model failed', e); return null; }),
