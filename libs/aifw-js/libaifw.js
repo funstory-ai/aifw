@@ -222,7 +222,7 @@ async function loadAifwCore() {
 
 const ASSETS_BASE_MANAGED_GITHUB = 'https://raw.githubusercontent.com/funstory-ai/OneAIFW-Assets/main/';
 const ASSETS_BASE_MANAGED_HF = 'https://huggingface.co/immersiveL/OneAIFW-Assets/resolve/main/';
-const ASSETS_BASE_MANAGED_MODEL_SCOPE = 'https://www.modelscope.cn/models/awwaawwa/OneAIFW-Assets/files/';
+const ASSETS_BASE_MANAGED_MODEL_SCOPE = 'https://www.modelscope.cn/models/awwaawwa/OneAIFW-Assets/resolve/master/';
 
 const OneAIFW_ASSETS_VERSION = '0.3.1';
 
