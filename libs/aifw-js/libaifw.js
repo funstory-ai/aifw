@@ -284,19 +284,17 @@ async function fetchWithCache(url, cacheName) {
 
 async function ensureManagedAssetsAvailable({ assetsBase, enModelId, zhModelId, ortName, remoteVersion }) {
   // remoteVersion should be provided by pickFastestAssetsBase(), which fetches from network with no-store
-  if (!remoteVersion) {
-    // Fallback: network fetch (no-store) if not provided
-    const helloUrl = assetsBase + 'hello.json';
-    const resp = await fetch(helloUrl, { cache: 'no-store' });
-    if (!resp.ok) throw new Error(`[aifw-js] fetch hello.json failed: ${resp.status}`);
-    const hello = await resp.json().catch(() => ({}));
-    remoteVersion = String(hello?.version || '');
-  }
+  // remoteVersion is expected to be valid; caller ensures it or throws earlier
+  // Validate version gate
   if (!remoteVersion) throw new Error('[aifw-js] invalid assets source: missing version in hello.json');
   if (compareVersion(OneAIFW_ASSETS_VERSION, remoteVersion) > 0) {
     throw new Error(`[aifw-js] assets version too old: required<=${OneAIFW_ASSETS_VERSION}, got ${remoteVersion}`);
   }
   const cacheName = `oneaifw-assets-v${remoteVersion}`;
+  // Ensure hello.json cached for offline readiness
+  try {
+    await fetchWithCache(assetsBase + 'hello.json', cacheName);
+  } catch (_) {}
 
   // Validate EN model
   const enOnnxUrl = assetsBase + `${DEFAULT_MODELS_SUBDIR}${enModelId}/onnx/model_quantized.onnx`;
@@ -325,7 +323,87 @@ async function ensureManagedAssetsAvailable({ assetsBase, enModelId, zhModelId, 
     throw new Error(`[aifw-js] ORT wasm hash mismatch: got ${ortHash}, expected ${ORT_WASM_SHA3_256}`);
   }
 
+  // Ensure tokenizer/config/vocab small files are cached for both models (mandatory warm set)
+  async function prefetchSmallFiles(modelId) {
+    const base = assetsBase + `${DEFAULT_MODELS_SUBDIR}${modelId}/`;
+    const files = [
+      'tokenizer.json',
+      'tokenizer_config.json',
+      'config.json',
+      'special_tokens_map.json',
+      'vocab.txt',
+    ];
+    // All these must be fetched and cached; failures should surface to caller
+    for (const f of files) {
+      const url = base + f;
+      const r = await fetchWithCache(url, cacheName);
+      if (!r.ok) throw new Error(`[aifw-js] prefetch failed: ${url} status=${r.status}`);
+    }
+  }
+  await prefetchSmallFiles(enModelId);
+  await prefetchSmallFiles(zhModelId);
+
   return { remoteVersion, cacheName };
+}
+
+async function hasAllAssetsInCache(enModelId, zhModelId, ortName) {
+  if (typeof caches === 'undefined' || !caches?.keys) return null;
+  const names = await caches.keys();
+  const versioned = names.filter((n) => typeof n === 'string' && n.startsWith('oneaifw-assets-v'))
+    .sort((a, b) => compareVersion(b.slice(18), a.slice(18))); // 'oneaifw-assets-v'.length = 18
+  // Only consider caches with version >= required
+  const eligible = versioned.filter((n) => compareVersion(n.slice(18), OneAIFW_ASSETS_VERSION) >= 0);
+  const mandatory = [
+    `${DEFAULT_MODELS_SUBDIR}${enModelId}/onnx/model_quantized.onnx`,
+    `${DEFAULT_MODELS_SUBDIR}${zhModelId}/onnx/model_quantized.onnx`,
+    `${DEFAULT_WASM_SUBDIR}${ortName}`,
+  ];
+  const smallFiles = [
+    `${DEFAULT_MODELS_SUBDIR}${enModelId}/tokenizer.json`,
+    `${DEFAULT_MODELS_SUBDIR}${enModelId}/tokenizer_config.json`,
+    `${DEFAULT_MODELS_SUBDIR}${enModelId}/config.json`,
+    `${DEFAULT_MODELS_SUBDIR}${enModelId}/special_tokens_map.json`,
+    `${DEFAULT_MODELS_SUBDIR}${enModelId}/vocab.txt`,
+    `${DEFAULT_MODELS_SUBDIR}${zhModelId}/tokenizer.json`,
+    `${DEFAULT_MODELS_SUBDIR}${zhModelId}/tokenizer_config.json`,
+    `${DEFAULT_MODELS_SUBDIR}${zhModelId}/config.json`,
+    `${DEFAULT_MODELS_SUBDIR}${zhModelId}/special_tokens_map.json`,
+    `${DEFAULT_MODELS_SUBDIR}${zhModelId}/vocab.txt`,
+  ];
+  for (const cacheName of eligible) {
+    try {
+      const cache = await caches.open(cacheName);
+      const reqs = await cache.keys();
+      if (!reqs?.length) continue;
+      const suffixToBase = new Map();
+      for (const req of reqs) {
+        const urlStr = req.url;
+        for (const suf of mandatory) {
+          if (urlStr.endsWith(suf)) {
+            const base = urlStr.slice(0, urlStr.length - suf.length);
+            if (!suffixToBase.has(suf)) suffixToBase.set(suf, base);
+          }
+        }
+      }
+      if (mandatory.every((s) => suffixToBase.has(s))) {
+        const bases = mandatory.map((s) => suffixToBase.get(s));
+        const allSame = bases.every((b) => b === bases[0]);
+        if (!allSame) continue;
+        const assetsBase = bases[0];
+        // Check small files exist (must exist for both models)
+        const allSmallExist = await (async () => {
+          for (const s of smallFiles) {
+            const match = await cache.match(new Request(assetsBase + s));
+            if (!match) return false;
+          }
+          return true;
+        })();
+        if (!allSmallExist) continue;
+        return { assetsBase, cacheName };
+      }
+    } catch (_) {}
+  }
+  return null;
 }
 
 async function pickFastestAssetsBase() {
@@ -405,19 +483,29 @@ export async function init(options = {}) {
 
   let cacheNameForFetch = null;
   if (modelsMode === 'managed' || ortMode === 'managed') {
-    const picked = await pickFastestAssetsBase();
-    const assetsBase = picked.assetsBase;
-    const remoteVersion = picked.remoteVersion;
-    if (modelsMode === 'managed') modelsBase = assetsBase + DEFAULT_MODELS_SUBDIR;
-    if (ortMode === 'managed') ortWasmBase = assetsBase + DEFAULT_WASM_SUBDIR;
-    const { cacheName } = await ensureManagedAssetsAvailable({
-      assetsBase,
-      enModelId,
-      zhModelId,
-      ortName,
-      remoteVersion,
-    });
-    cacheNameForFetch = cacheName;
+    // 1) Try to satisfy entirely from CacheStorage without any network
+    const cached = await hasAllAssetsInCache(enModelId, zhModelId, ortName);
+    if (cached?.assetsBase && cached?.cacheName) {
+      const assetsBase = cached.assetsBase;
+      if (modelsMode === 'managed') modelsBase = assetsBase + DEFAULT_MODELS_SUBDIR;
+      if (ortMode === 'managed') ortWasmBase = assetsBase + DEFAULT_WASM_SUBDIR;
+      cacheNameForFetch = cached.cacheName;
+    } else {
+      // 2) No complete cache -> pick best remote base, fetch hello.json (no-store), then cache and warm
+      const picked = await pickFastestAssetsBase();
+      const assetsBase = picked.assetsBase;
+      const remoteVersion = picked.remoteVersion;
+      if (modelsMode === 'managed') modelsBase = assetsBase + DEFAULT_MODELS_SUBDIR;
+      if (ortMode === 'managed') ortWasmBase = assetsBase + DEFAULT_WASM_SUBDIR;
+      const { cacheName } = await ensureManagedAssetsAvailable({
+        assetsBase,
+        enModelId,
+        zhModelId,
+        ortName,
+        remoteVersion,
+      });
+      cacheNameForFetch = cacheName;
+    }
   }
 
   console.info('[aifw-js] modelsBase:', modelsBase);
