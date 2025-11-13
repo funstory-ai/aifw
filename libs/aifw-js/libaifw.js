@@ -282,11 +282,16 @@ async function fetchWithCache(url, cacheName) {
   return resp;
 }
 
-async function ensureManagedAssetsAvailable({ assetsBase, enModelId, zhModelId, ortName }) {
-  const helloUrl = assetsBase + 'hello.json';
-  const helloResp = await fetchWithCache(helloUrl, 'oneaifw-assets');
-  const hello = await helloResp.json().catch(() => ({}));
-  const remoteVersion = String(hello?.version || '');
+async function ensureManagedAssetsAvailable({ assetsBase, enModelId, zhModelId, ortName, remoteVersion }) {
+  // remoteVersion should be provided by pickFastestAssetsBase(), which fetches from network with no-store
+  if (!remoteVersion) {
+    // Fallback: network fetch (no-store) if not provided
+    const helloUrl = assetsBase + 'hello.json';
+    const resp = await fetch(helloUrl, { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`[aifw-js] fetch hello.json failed: ${resp.status}`);
+    const hello = await resp.json().catch(() => ({}));
+    remoteVersion = String(hello?.version || '');
+  }
   if (!remoteVersion) throw new Error('[aifw-js] invalid assets source: missing version in hello.json');
   if (compareVersion(OneAIFW_ASSETS_VERSION, remoteVersion) > 0) {
     throw new Error(`[aifw-js] assets version too old: required<=${OneAIFW_ASSETS_VERSION}, got ${remoteVersion}`);
@@ -333,8 +338,10 @@ async function pickFastestAssetsBase() {
     const url = base + 'hello.json';
     const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) throw new Error(`hello.json not ok from ${url}: ${r.status}`);
-    await r.json().catch(() => { throw new Error(`invalid hello.json from ${url}`); });
-    return base;
+    const obj = await r.json().catch(() => { throw new Error(`invalid hello.json from ${url}`); });
+    const version = String(obj?.version || '');
+    if (!version) throw new Error(`missing version in hello.json from ${url}`);
+    return { assetsBase: base, remoteVersion: version };
   })());
   try {
     return await Promise.any(tasks);
@@ -398,7 +405,9 @@ export async function init(options = {}) {
 
   let cacheNameForFetch = null;
   if (modelsMode === 'managed' || ortMode === 'managed') {
-    const assetsBase = await pickFastestAssetsBase();
+    const picked = await pickFastestAssetsBase();
+    const assetsBase = picked.assetsBase;
+    const remoteVersion = picked.remoteVersion;
     if (modelsMode === 'managed') modelsBase = assetsBase + DEFAULT_MODELS_SUBDIR;
     if (ortMode === 'managed') ortWasmBase = assetsBase + DEFAULT_WASM_SUBDIR;
     const { cacheName } = await ensureManagedAssetsAvailable({
@@ -406,13 +415,13 @@ export async function init(options = {}) {
       enModelId,
       zhModelId,
       ortName,
+      remoteVersion,
     });
     cacheNameForFetch = cacheName;
   }
 
   console.info('[aifw-js] modelsBase:', modelsBase);
   console.info('[aifw-js] ortWasmBase:', ortWasmBase);
-  console.info('[aifw-js] cacheNameForFetch:', cacheNameForFetch);
 
   // Load aifw core wasm library (separate from ORT wasm)
   wasm = await loadAifwCore();
@@ -428,7 +437,7 @@ export async function init(options = {}) {
   initEnvArgs.threads = threads;
   initEnvArgs.simd = simd;
   if (cacheNameForFetch) {
-    initEnvArgs.fetchFn = (url, opts) => fetchWithCache(url, cacheNameForFetch);
+    initEnvArgs.customCache = { name: cacheNameForFetch };
   }
   nerLib.initEnv(initEnvArgs);
 
@@ -488,10 +497,10 @@ function selectNer(language) {
   const lang = String(language || '').toLowerCase();
   // Treat zh, zh-cn, zh-tw, zh-hans, zh-hant as Chinese
   if (lang === 'zh' || lang.startsWith('zh-')) {
-    console.log('[aifw-js] select zh NER pipeline.');
+    console.debug('[aifw-js] select zh NER pipeline.');
     return nerPipelines.zh || nerPipelines.default;
   }
-  console.log('[aifw-js] select en NER pipeline.', nerPipelines.default);
+  console.debug('[aifw-js] select en NER pipeline.', nerPipelines.default);
   return nerPipelines.default;
 }
 

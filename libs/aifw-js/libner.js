@@ -3,17 +3,37 @@ import * as Transformers from '@xenova/transformers';
 
 let MODELS_BASE = '';
 
-export function initEnv({ wasmBase = '/wasm/', modelsBase = '', threads, simd, fetchFn } = {}) {
+export function initEnv({ wasmBase = '/wasm/', modelsBase = '', threads, simd, customCache } = {}) {
   env.allowLocalModels = true;
   env.useBrowserCache = true;
   env.backends.onnx.wasm.wasmPaths = wasmBase;
   MODELS_BASE = modelsBase || '';
   if (MODELS_BASE) {
-    const modelsBase = MODELS_BASE.endsWith('/') ? MODELS_BASE.slice(0, -1) : MODELS_BASE;
-    env.localModelPath = modelsBase; // transformers will fetch from `${env.localModelPath}/${modelId}/...`
+    const basePath = MODELS_BASE.endsWith('/') ? MODELS_BASE.slice(0, -1) : MODELS_BASE;
+    if (/^https?:\/\//i.test(basePath)) {
+      // Use remote loader so custom cache can intercept requests
+      env.allowRemoteModels = true;
+      env.allowLocalModels = false;
+      env.remoteHost = basePath + '/';
+      env.remotePathTemplate = '{model}/';
+      console.debug('[aifw-js] using remote models base:', basePath);
+    } else {
+      // Use local path (served by same origin)
+      env.localModelPath = basePath; // transformers will fetch from `${env.localModelPath}/${modelId}/...`
+    }
   }
-  if (typeof fetchFn === 'function') {
-    env.fetch = fetchFn;
+  if (customCache) {
+    env.useCustomCache = true;
+    env.customCache = {
+      async match(request) {
+        const cache = await caches.open(typeof customCache === 'string' ? customCache : customCache.name || 'oneaifw-assets');
+        return cache.match(request);
+      },
+      async put(request, response) {
+        const cache = await caches.open(typeof customCache === 'string' ? customCache : customCache.name || 'oneaifw-assets');
+        return cache.put(request, response);
+      },
+    };
   }
   if (typeof threads === 'number' && threads > 0) env.backends.onnx.wasm.numThreads = threads;
   if (typeof simd === 'boolean') env.backends.onnx.wasm.simd = simd;
