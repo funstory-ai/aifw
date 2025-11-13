@@ -26,7 +26,7 @@
   - `mode` (String, 可选): 整体模式（默认应用到子项），可选 `'managed' | 'customize'`
   - `models` (Object, 可选): 模型资源设置
     - `mode` (String, 可选): `'managed' | 'customize'`
-    - `baseUrl` (String, 可选): 当 `mode='customize'` 时必须指定模型根路径（如 `'/models/'`）
+    - `modelsBase` (String, 可选): 当 `mode='customize'` 时必须指定模型根路径（如 `'/models/'`）
     - `enModelId` (String, 可选): 英文 NER 模型 ID（默认 `'funstory-ai/neurobert-mini'`）
     - `zhModelId` (String, 可选): 中文 NER 模型 ID（默认 `'ckiplab/bert-tiny-chinese-ner'`）
   - `ort` (Object, 可选): ONNXRuntime Web (ORT) WASM 设置
@@ -36,7 +36,7 @@
     - `simd` (Boolean, 可选): 是否启用 SIMD（默认 `true`）
 
 兼容性（向后兼容）：
-- 仍支持旧参数：`wasmBase`（等价于 `ort.wasmBase` 的本地/自定义路径）、`modelsBase`（等价于 `models.baseUrl` 的本地/自定义路径）。
+- 仍支持旧参数：`wasmBase`（等价于 `ort.wasmBase` 的本地/自定义路径）、`modelsBase`（等价于 `models.modelsBase` 的本地/自定义路径）。
 - managed mode，且传递了自定义资源时，打 warning 日志，然后使用 managed 模式，忽略自定义资源。
 
 **返回值：**
@@ -54,7 +54,7 @@ await init();
 // 2) local：本地调试，模型与 ORT wasm 均从本地路径加载
 await init({
   mode: 'local',
-  models: { baseUrl: '/assets/models/' },    // 模型根目录
+  models: { modelsBase: '/assets/models/' },    // 模型根目录
   ort: { wasmBase: '/assets/wasm/' }         // ORT wasm 目录
 });
 
@@ -62,7 +62,7 @@ await init({
 await init({
   models: {
     mode: 'customize',
-    baseUrl: 'https://cdn.example.com/oneaifw-models'
+    modelsBase: 'https://cdn.example.com/oneaifw-models'
   },
   ort: {
     mode: 'customize',
@@ -72,7 +72,7 @@ await init({
 
 // 4) 混合：模型自定义，ORT 使用默认 CDN/内置路径
 await init({
-  models: { mode: 'customize', baseUrl: '/my-models' },
+  models: { mode: 'customize', modelsBase: '/my-models' },
   ort: { mode: 'default' } // 不设路径则走上游默认
 });
 ```
@@ -450,7 +450,7 @@ import { init, maskText, restoreText, deinit } from './libaifw.js';
 async function example() {
   try {
     // 1. 初始化
-    await init({ modelsBase: '/models/', wasmBase: '/wasm/' }); // 兼容旧参数：分别映射为 models.baseUrl 与 ort.wasmBase
+    await init({ modelsBase: '/models/', wasmBase: '/wasm/' }); // 兼容旧参数：分别映射为 models.modelsBase 与 ort.wasmBase
 
     // 2. 匿名化文本
     const originalText = '我的邮箱是 user@example.com';
