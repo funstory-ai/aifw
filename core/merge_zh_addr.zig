@@ -59,8 +59,8 @@ fn endsWithAny(text: []const u8, start: usize, end: usize, toks: []const []const
 
 fn endsWithPoiSuffix(text: []const u8, start: usize, end: usize) bool {
     const POI = [_][]const u8{
-        "广场", "中心", "花园", "花苑", "苑",    "园", "城", "天地", "大厦", "大楼", "港", "塔", "廊", "坊", "里", "府",
-        "廣場", "花園", "園",    "大廈", "大樓",
+        "广场", "中心", "花园", "花苑", "苑", "城", "天地", "大厦", "大楼", "港", "塔", "廊", "坊", "里", "府",
+        "廣場", "花園", "大廈", "大樓",
     };
     return endsWithAny(text, start, end, &POI);
 }
@@ -555,6 +555,15 @@ fn mergeAdjacentAddressSpans(allocator: std.mem.Allocator, text: []const u8, spa
     var i: usize = 1;
     while (i < tmp_spans.len) : (i += 1) {
         const nxt = tmp_spans[i];
+        // skip non-address spans
+        if (cur.entity_type != .PHYSICAL_ADDRESS and
+            cur.entity_type != .ORGANIZATION)
+        {
+            std.log.debug("[zh-addr] filter out non-address/organization span: entity_type={s} [{d},{d}) seg={s}", .{ @tagName(cur.entity_type), cur.start, cur.end, text[cur.start..cur.end] });
+            cur = nxt;
+            continue;
+        }
+        // merge adjacent address spans
         if (cur.entity_type == .PHYSICAL_ADDRESS and nxt.entity_type == .PHYSICAL_ADDRESS and nxt.start >= cur.end) {
             var ok = true;
             var p: usize = cur.end;
@@ -575,7 +584,12 @@ fn mergeAdjacentAddressSpans(allocator: std.mem.Allocator, text: []const u8, spa
         try out.append(allocator, cur);
         cur = nxt;
     }
-    try out.append(allocator, cur);
+    // append last only if it's address, organization, or user name
+    if (cur.entity_type == .PHYSICAL_ADDRESS or
+        cur.entity_type == .ORGANIZATION)
+    {
+        try out.append(allocator, cur);
+    }
     return try out.toOwnedSlice(allocator);
 }
 
@@ -664,6 +678,7 @@ fn canRightAttach(
     current_bits: u32,
     cand_level: AddrLevel,
     text: []const u8,
+    cur_start: usize,
     cur_end: usize,
     cand_start: usize,
     cand_end: usize,
@@ -673,6 +688,21 @@ fn canRightAttach(
     if (low == 0) return true; // first token in chain
     // strict adjacency
     if (cand_r + 1 == low) return true;
+    // whitelist jump: L7 -> L3 (township directly to building)
+    if (low == levelRank(.L7_township) and cand_r == levelRank(.L3_building)) {
+        const special_l7_suffixes = &[_][]const u8{ "科技园", "科学园", "工业园", "工业区", "产业园", "科技園", "科學園", "工業園", "工業區", "產業園" };
+        if (onlyLightBetween(text, cur_end, cand_start, 4) and
+            endsWithAny(text, cur_start, cur_end, special_l7_suffixes)) return true;
+    }
+    // whitelist jump: L5 -> L7 (house number directly to township)
+    if (low == levelRank(.L5_house_no) and cand_r == levelRank(.L7_township)) {
+        const special_l7_suffixes = &[_][]const u8{ "科技园", "科学园", "工业园", "工业区", "产业园", "科技園", "科學園", "工業園", "工業區", "產業園" };
+        if (endsWithAny(text, cand_start, cand_end, special_l7_suffixes)) {
+            if ((cand_start <= cur_end and cand_end > cur_end) or nearCharsBetween(text, cur_end, cand_start, 4)) {
+                return true;
+            }
+        }
+    }
     // whitelist jump: L6 -> L4 (road directly to POI), allow near distance (<=4 chars)
     if (low == levelRank(.L6_road) and cand_r == levelRank(.L4_poi)) {
         if (onlyLightBetween(text, cur_end, cand_start, 4)) return true;
@@ -730,68 +760,11 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
     defer tokens_buf.deinit(allocator);
 
     for (merged_adjacent) |sp| {
+        // skip non-address seeds completely
         if (sp.entity_type != .PHYSICAL_ADDRESS and
-            (sp.entity_type == .ORGANIZATION or sp.entity_type == .USER_MAME))
+            sp.entity_type != .ORGANIZATION)
         {
-            // keep original non-address span
-            try merged_zh.append(allocator, sp);
-            // fallback: try to detect a Chinese address starting at the end of this span
-            const probe_start: usize = sp.end;
-            const win_end0 = @min(text.len, probe_start + SCAN_WIN);
-            if (win_end0 > probe_start) {
-                tokens_buf.clearRetainingCapacity();
-                _ = try zhTokenizeWindow(allocator, text, @intCast(probe_start), @intCast(win_end0), &tokens_buf);
-                if (tokens_buf.items.len > 0) {
-                    std.log.debug("[zh-addr] fallback probe after non-addr span: start={d} end={d}", .{ probe_start, win_end0 });
-                    var fa_bits: u32 = 0;
-                    var fa_start: usize = tokens_buf.items[0].start;
-                    var fa_end: usize = tokens_buf.items[0].end;
-                    fa_bits |= bitForLevel(tokens_buf.items[0].level);
-                    // right extend from probe_start using standard logic
-                    while (true) {
-                        if (countCharsBetween(text, probe_start, fa_end) >= MAX_TOTAL_GROW_CHARS) break;
-                        const cur_low2 = lowestRankInBits(fa_bits);
-                        if (cur_low2 != 0 and cur_low2 <= levelRank(.L5_house_no)) {
-                            if (detectNextAddressHeadWithin(text, fa_end, LOOKAHEAD_STOP)) break;
-                        }
-                        const win_end2 = @min(text.len, fa_end + SCAN_WIN);
-                        if (win_end2 <= fa_end) break;
-                        tokens_buf.clearRetainingCapacity();
-                        _ = try zhTokenizeWindow(allocator, text, @intCast(fa_end), @intCast(win_end2), &tokens_buf);
-                        if (tokens_buf.items.len == 0) break;
-                        var accepted2: bool = false;
-                        var ii: usize = 0;
-                        while (ii < tokens_buf.items.len) : (ii += 1) {
-                            const tk2 = tokens_buf.items[ii];
-                            if (tk2.level == .L8_district and (fa_bits & BIT_L8) != 0) {
-                                continue;
-                            }
-                            if (canRightAttach(fa_bits, tk2.level, text, fa_end, tk2.start, tk2.end)) {
-                                std.log.debug("[zh-addr]   right accept tk2 level={s} [{d},{d}) seg={s}", .{ levelName(tk2.level), tk2.start, tk2.end, text[tk2.start..tk2.end] });
-                                fa_bits |= bitForLevel(tk2.level);
-                                if (tk2.start < fa_start) fa_start = tk2.start;
-                                fa_end = tk2.end;
-                                std.log.debug("[zh-addr]   right fa_end={d} fa_bits=0x{x}", .{ fa_end, fa_bits });
-                                accepted2 = true;
-                                break;
-                            } else {
-                                std.log.debug("[zh-addr]   right reject tk2 level={s} (not adjacent/whitelist) [{d},{d}) seg={s}", .{ levelName(tk2.level), tk2.start, tk2.end, text[tk2.start..tk2.end] });
-                            }
-                        }
-                        if (!accepted2) break;
-                    }
-                    // privacy threshold
-                    const has_priv2 = (fa_bits & (BIT_L5 | BIT_L4 | BIT_L3 | BIT_L2 | BIT_L1)) != 0;
-                    if (has_priv2) {
-                        var out_sp2 = sp;
-                        out_sp2.entity_type = .PHYSICAL_ADDRESS;
-                        out_sp2.start = @intCast(fa_start);
-                        out_sp2.end = @intCast(fa_end);
-                        std.log.debug("[zh-addr] fallback accept span [{d},{d}) text={s}", .{ out_sp2.start, out_sp2.end, text[out_sp2.start..out_sp2.end] });
-                        try merged_zh.append(allocator, out_sp2);
-                    }
-                }
-            }
+            std.log.debug("[zh-addr] skip non-address/organization seed: entity_type={s} [{d},{d}) seg={s}", .{ @tagName(sp.entity_type), sp.start, sp.end, text[sp.start..sp.end] });
             continue;
         }
         var new_start: usize = sp.start;
@@ -809,9 +782,9 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
         // right extension
         while (true) {
             if (countCharsBetween(text, sp.end, new_end) >= MAX_TOTAL_GROW_CHARS) break;
-            // front lookahead stop
-            const cur_low = lowestRankInBits(bits);
-            if (cur_low != 0 and cur_low <= levelRank(.L5_house_no)) {
+            // front lookahead stop: only after reaching privacy threshold
+            const has_priv_rt = (bits & (BIT_L5 | BIT_L4 | BIT_L3 | BIT_L2 | BIT_L1)) != 0;
+            if (has_priv_rt) {
                 if (detectNextAddressHeadWithin(text, new_end, LOOKAHEAD_STOP)) {
                     std.log.debug("[zh-addr] right stop: lookahead head within {d} chars at pos={d}", .{ LOOKAHEAD_STOP, new_end });
                     break;
@@ -836,7 +809,7 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
                     std.log.debug("[zh-addr]   right reject tk level={s} (L8 duplicate) [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
                     continue;
                 }
-                if (canRightAttach(bits, tk.level, text, new_end, tk.start, tk.end)) {
+                if (canRightAttach(bits, tk.level, text, new_start, new_end, tk.start, tk.end)) {
                     std.log.debug("[zh-addr]   right accept tk level={s} [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
                     bits |= bitForLevel(tk.level);
                     if (tk.start < new_start) {
@@ -904,6 +877,7 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
         }
 
         var out_sp = sp;
+        out_sp.entity_type = .PHYSICAL_ADDRESS;
         out_sp.start = @intCast(new_start);
         out_sp.end = @intCast(new_end);
         std.log.debug("[zh-addr] accept final span [{d},{d}) text={s}", .{ out_sp.start, out_sp.end, text[out_sp.start..out_sp.end] });
@@ -984,8 +958,9 @@ fn districtSuffixAt(text: []const u8, pos: usize) usize {
 
 fn townshipSuffixAt(text: []const u8, pos: usize) usize {
     const SUF = [_][]const u8{
-        "街道", "镇",       "鎮",       "乡",                   "鄉", "里", "村",
-        "新区", "高新区", "开发区", "经济技术开发区",
+        "街道",    "镇",       "鎮",       "乡",                   "鄉",       "里",       "村",
+        "新区",    "高新区", "开发区", "经济技术开发区", "科技园", "科学园", "工业园",
+        "工业区", "产业园", "科技園", "科學園",             "工業園", "工業區", "產業園",
     };
     var i: usize = 0;
     while (i < SUF.len) : (i += 1) {
