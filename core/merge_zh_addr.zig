@@ -39,7 +39,7 @@ fn matchToken(text: []const u8, pos: usize, token: []const u8) bool {
 }
 
 fn heavySepAt(text: []const u8, pos: usize) usize {
-    const HEAVY = [_][]const u8{ "。", "！", "？", "；", "：", "、", "（", "）", "/", "\\", "|" };
+    const HEAVY = [_][]const u8{ "。", "！", "？", "；", "：", "、", "，", "（", "）", "/", "\\", "|" };
     var i: usize = 0;
     while (i < HEAVY.len) : (i += 1) {
         if (matchToken(text, pos, HEAVY[i])) return HEAVY[i].len;
@@ -59,15 +59,62 @@ fn endsWithAny(text: []const u8, start: usize, end: usize, toks: []const []const
 
 fn endsWithPoiSuffix(text: []const u8, start: usize, end: usize) bool {
     const POI = [_][]const u8{
-        "广场", "中心", "花园", "花苑", "苑", "城", "天地", "大厦", "大楼", "港", "塔", "廊", "坊", "里", "府",
-        "廣場", "花園", "大廈", "大樓",
+        "广场",       "中心",          "花园", "花苑", "苑",    "城",    "天地",       "大厦",          "大楼", "港", "塔", "廊", "坊", "里", "府",
+        "购物公园", "购物艺术馆", "廣場", "花園", "大廈", "大樓", "購物公園", "購物藝術館",
     };
-    return endsWithAny(text, start, end, &POI);
+    if (end <= start) return false;
+    var i: usize = 0;
+    while (i < POI.len) : (i += 1) {
+        const t = POI[i];
+        if (end >= start + t.len and matchToken(text, end - t.len, t)) {
+            // Special handling for "城": if immediately followed by "区/縣/县/區"
+            // (ignoring light ASCII spaces), we treat the whole segment as
+            // administrative (e.g. "上城区") rather than a POI ending with "城".
+            if (std.mem.eql(u8, t, "城")) {
+                var p: usize = end;
+                while (p < text.len and isAsciiLight(text[p])) : (p += 1) {}
+                if (p < text.len and
+                    (matchToken(text, p, "区") or matchToken(text, p, "區") or
+                        matchToken(text, p, "县") or matchToken(text, p, "縣")))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+fn findRoadSuffixInsideEnd(text: []const u8, start: usize, end: usize) usize {
+    var p: usize = start;
+    while (p < end) : (p += 1) {
+        const suf_len = roadSuffixAt(text, p);
+        if (suf_len > 0) return p + suf_len;
+    }
+    return 0;
 }
 
 fn adminSuffixAt(text: []const u8, pos: usize) usize {
+    // handle "市" specially to avoid treating common nouns like "城市" as
+    // administrative suffixes. For example, in "新城市廣場" we do NOT want
+    // the inner "市" to be recognized as a city-level suffix.
+    if (matchToken(text, pos, "市")) {
+        // avoid treating "...城市..." (common noun) as a city-level suffix.
+        // We check the previous UTF-8 codepoint: if it starts a "城市"
+        // sequence like "...城市廣場", we skip this "市" as admin suffix.
+        const prev = utf8PrevCpStart(text, pos);
+        if (prev < text.len and matchToken(text, prev, "城市")) {
+            return 0;
+        }
+        return "市".len;
+    }
+
     const ADMIN = [_][]const u8{
-        "省", "市", "自治州", "自治区", "州", "盟", "地区", "特别行政区", "区", "區", "县", "縣", "旗", "新区", "高新区", "经济技术开发区", "开发区", "街道", "镇", "鎮", "乡", "鄉", "里", "村",
+        "省",                   "自治州", "自治区", "州", "盟", "地区", "特别行政区",
+        "区",                   "區",       "县",       "縣", "旗", "新区", "高新区",
+        "经济技术开发区", "开发区", "街道",    "镇", "鎮", "乡",    "鄉",
+        "里",                   "村",
     };
     var i: usize = 0;
     while (i < ADMIN.len) : (i += 1) {
@@ -78,12 +125,16 @@ fn adminSuffixAt(text: []const u8, pos: usize) usize {
 
 fn roadSuffixAt(text: []const u8, pos: usize) usize {
     const SUF = [_][]const u8{
-        "大道", "大街", "环路", "环线", "路", "街", "巷", "弄", "里", "道", "胡同", "段", "期",
-        "環路", "環線",
+        // longer suffixes first
+        "大道", "大街", "环路", "环线", "道中", "道东", "道西", "道南", "道北",
+        "路",    "街",    "巷",    "弄",    "里",    "道",    "胡同", "段",    "環路",
+        "環線",
     };
     var i: usize = 0;
     while (i < SUF.len) : (i += 1) {
-        if (matchToken(text, pos, SUF[i])) return SUF[i].len;
+        if (matchToken(text, pos, SUF[i])) {
+            return SUF[i].len;
+        }
     }
     return 0;
 }
@@ -93,7 +144,7 @@ fn endsWithRoadSuffix(text: []const u8, start: u32, end: u32) bool {
     var e: usize = end;
     while (e > start and isAsciiLight(text[e - 1])) : (e -= 1) {}
     const SUF = [_][]const u8{
-        "大道", "大街", "环路", "环线", "路", "街", "巷", "弄", "里", "道", "胡同", "段", "期",
+        "大道", "大街", "环路", "环线", "路", "街", "巷", "弄", "里", "道", "胡同", "段",
         "環路", "環線",
     };
     var i: usize = 0;
@@ -113,7 +164,10 @@ fn detectNextAddressHeadWithin(text: []const u8, start_pos: usize, window: usize
         const name_start = p;
         while (p < limit) : (p += 1) {
             if (roadSuffixAt(text, p) > 0 or adminSuffixAt(text, p) > 0) {
-                if (p > name_start) return true;
+                if (p > name_start) {
+                    // std.log.debug("[zh-addr] detectNextAddressHeadWithin: found road suffix at {d} seg={s}", .{ p, text[name_start..p] });
+                    return true;
+                }
             }
             const b = text[p];
             if (isAsciiAlnum(b)) continue;
@@ -124,8 +178,14 @@ fn detectNextAddressHeadWithin(text: []const u8, start_pos: usize, window: usize
         var q: usize = p;
         while (q < limit and isAsciiLight(text[q])) : (q += 1) {}
         if (q >= limit) break;
-        if (roadSuffixAt(text, q) > 0) return true;
-        if (adminSuffixAt(text, q) > 0) return true;
+        if (roadSuffixAt(text, q) > 0) {
+            // std.log.debug("[zh-addr] detectNextAddressHeadWithin: 2 found road suffix at {d} seg={s}", .{ q, text[p..q] });
+            return true;
+        }
+        if (adminSuffixAt(text, q) > 0) {
+            // std.log.debug("[zh-addr] detectNextAddressHeadWithin: 2 found admin suffix at {d} seg={s}", .{ q, text[p..q] });
+            return true;
+        }
     }
     return false;
 }
@@ -672,8 +732,7 @@ fn nearCharsBetween(text: []const u8, a_end: usize, b_start: usize, max_chars: u
     return dist <= max_chars;
 }
 
-// (removed) hasInlineBuildingBetween: no longer needed since L3 tokens are built during tokenization
-
+// return the new bits after right attach
 fn canRightAttach(
     current_bits: u32,
     cand_level: AddrLevel,
@@ -682,63 +741,117 @@ fn canRightAttach(
     cur_end: usize,
     cand_start: usize,
     cand_end: usize,
-) bool {
+) u32 {
     const low = lowestRankInBits(current_bits);
     const cand_r = levelRank(cand_level);
-    if (low == 0) return true; // first token in chain
+    // first token in chain: accept any candidate level and set its bit
+    if (low == 0) return current_bits | bitForLevel(cand_level);
     // strict adjacency
-    if (cand_r + 1 == low) return true;
+    if (cand_r + 1 == low) return current_bits | bitForLevel(cand_level);
+    // whitelist jump: L11 -> L7 (country region directly to township)
+    if (low == levelRank(.L11_country_region) and cand_r == levelRank(.L7_township)) {
+        const special_l11_suffixes = &[_][]const u8{"香港"};
+        if (onlyLightBetween(text, cur_end, cand_start, 4) and
+            endsWithAny(text, cur_start, cur_end, special_l11_suffixes))
+        {
+            return current_bits | bitForLevel(cand_level);
+        }
+    }
     // whitelist jump: L7 -> L3 (township directly to building)
     if (low == levelRank(.L7_township) and cand_r == levelRank(.L3_building)) {
         const special_l7_suffixes = &[_][]const u8{ "科技园", "科学园", "工业园", "工业区", "产业园", "科技園", "科學園", "工業園", "工業區", "產業園" };
         if (onlyLightBetween(text, cur_end, cand_start, 4) and
-            endsWithAny(text, cur_start, cur_end, special_l7_suffixes)) return true;
+            endsWithAny(text, cur_start, cur_end, special_l7_suffixes))
+        {
+            return current_bits | bitForLevel(cand_level);
+        }
     }
     // whitelist jump: L5 -> L7 (house number directly to township)
     if (low == levelRank(.L5_house_no) and cand_r == levelRank(.L7_township)) {
         const special_l7_suffixes = &[_][]const u8{ "科技园", "科学园", "工业园", "工业区", "产业园", "科技園", "科學園", "工業園", "工業區", "產業園" };
         if (endsWithAny(text, cand_start, cand_end, special_l7_suffixes)) {
             if ((cand_start <= cur_end and cand_end > cur_end) or nearCharsBetween(text, cur_end, cand_start, 4)) {
-                return true;
+                return current_bits | bitForLevel(cand_level);
             }
         }
     }
     // whitelist jump: L6 -> L4 (road directly to POI), allow near distance (<=4 chars)
     if (low == levelRank(.L6_road) and cand_r == levelRank(.L4_poi)) {
-        if (onlyLightBetween(text, cur_end, cand_start, 4)) return true;
+        if (onlyLightBetween(text, cur_end, cand_start, 4)) {
+            return current_bits | bitForLevel(cand_level);
+        }
     }
     // whiteList jump: L5 -> L2 (house number directly to floor), allow near distance (<=4 chars)
     if (low == levelRank(.L5_house_no) and cand_r == levelRank(.L2_floor)) {
-        if (nearCharsBetween(text, cur_end, cand_start, 4)) return true;
+        if (nearCharsBetween(text, cur_end, cand_start, 4)) {
+            return current_bits | bitForLevel(cand_level);
+        }
+    }
+    // whitelist jump: L4 -> L6 (POI directly to road), allow overlap attach
+    if (low == levelRank(.L4_poi) and cand_r == levelRank(.L6_road)) {
+        // For special cases like "沙田银城 + 街 = 沙田银城街", allow overlap attach road tokan just only has road suffix.
+        if (cur_end + roadSuffixAt(text, cur_end) == cand_end) {
+            // clear L4 bit to avoid can not right attach L5, because L5 can not attach to L4.
+            return (current_bits | bitForLevel(cand_level)) & ~BIT_L4;
+        }
     }
     // whitelist jump: L4 -> L2 (POI directly to floor), allow near distance (<=4 chars)
     if (low == levelRank(.L4_poi) and cand_r == levelRank(.L2_floor)) {
-        if (nearCharsBetween(text, cur_end, cand_start, 4)) return true;
+        if (nearCharsBetween(text, cur_end, cand_start, 4)) {
+            return current_bits | bitForLevel(cand_level);
+        }
     }
     // whitelist jump: L4 -> L1 (POI directly to room), allow near distance (<=4 chars)
     if (low == levelRank(.L4_poi) and cand_r == levelRank(.L1_unit_room)) {
-        if (nearCharsBetween(text, cur_end, cand_start, 5)) return true;
+        if (nearCharsBetween(text, cur_end, cand_start, 5)) {
+            return current_bits | bitForLevel(cand_level);
+        }
     }
     // whitelist jump: L3 -> L1 (building directly to room)
     if (low == levelRank(.L3_building) and cand_r == levelRank(.L1_unit_room)) {
-        if (nearCharsBetween(text, cur_end, cand_start, 6)) return true;
+        if (nearCharsBetween(text, cur_end, cand_start, 6)) {
+            return current_bits | bitForLevel(cand_level);
+        }
     }
     // whitelist jump: L8 -> L6 (district directly to road), allow overlap attach
     if (low == levelRank(.L8_district) and cand_r == levelRank(.L6_road)) {
-        if (cand_start <= cur_end and cand_end > cur_end) return true;
+        if (cand_start <= cur_end and cand_end > cur_end) {
+            return current_bits | bitForLevel(cand_level);
+        }
     }
     // whitelist jump: L9 -> L6 (city directly to road), allow overlap attach
     if (low == levelRank(.L9_city) and cand_r == levelRank(.L6_road)) {
-        if (cand_start <= cur_end and cand_end > cur_end) return true;
+        if (cand_start <= cur_end and cand_end > cur_end) {
+            return current_bits | bitForLevel(cand_level);
+        }
     }
-    return false;
+    return 0;
 }
 
-fn canLeftAttach(current_bits: u32, cand_level: AddrLevel) bool {
+// return the new bits after left attach
+fn canLeftAttach(
+    current_bits: u32,
+    cand_level: AddrLevel,
+    text: []const u8,
+    cur_start: usize,
+    cand_start: usize,
+    cand_end: usize,
+) u32 {
     const high = highestRankInBits(current_bits);
-    const cand_low = levelRank(cand_level);
-    if (high == 0) return true; // first token in chain
-    return cand_low == high + 1;
+    const cand_l = levelRank(cand_level);
+    if (high == 0) return current_bits; // first token in chain
+    if (cand_l == high + 1) return current_bits | bitForLevel(cand_level);
+
+    // whitelist jump: L6 -> L8 for specific district names (e.g. "新界"),
+    if (high == levelRank(.L6_road) and cand_l == levelRank(.L8_district)) {
+        const special_l8_suffixes = &[_][]const u8{"新界"};
+        if (endsWithAny(text, cand_start, cand_end, special_l8_suffixes) and
+            onlyLightBetween(text, cand_end, cur_start, 4))
+        {
+            return current_bits | bitForLevel(cand_level);
+        }
+    }
+    return 0;
 }
 
 fn levelName(lv: AddrLevel) []const u8 {
@@ -748,6 +861,14 @@ fn levelName(lv: AddrLevel) []const u8 {
 pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans: []const RecogEntity) ![]RecogEntity {
     const merged_adjacent = try mergeAdjacentAddressSpans(allocator, text, spans);
     defer allocator.free(merged_adjacent);
+
+    // track which merged seeds have already been covered by an earlier merged address span
+    var consumed = try allocator.alloc(bool, merged_adjacent.len);
+    defer allocator.free(consumed);
+    var ci: usize = 0;
+    while (ci < consumed.len) : (ci += 1) {
+        consumed[ci] = false;
+    }
 
     var merged_zh = try std.ArrayList(RecogEntity).initCapacity(allocator, merged_adjacent.len);
     defer merged_zh.deinit(allocator);
@@ -759,7 +880,13 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
     var tokens_buf = try std.ArrayList(ZhToken).initCapacity(allocator, 16);
     defer tokens_buf.deinit(allocator);
 
-    for (merged_adjacent) |sp| {
+    var idx: usize = 0;
+    while (idx < merged_adjacent.len) : (idx += 1) {
+        const sp = merged_adjacent[idx];
+        if (consumed[idx]) {
+            std.log.debug("[zh-addr] skip covered seed: entity_type={s} [{d},{d}) seg={s}", .{ @tagName(sp.entity_type), sp.start, sp.end, text[sp.start..sp.end] });
+            continue;
+        }
         // skip non-address seeds completely
         if (sp.entity_type != .PHYSICAL_ADDRESS and
             sp.entity_type != .ORGANIZATION)
@@ -785,6 +912,13 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
             // front lookahead stop: only after reaching privacy threshold
             const has_priv_rt = (bits & (BIT_L5 | BIT_L4 | BIT_L3 | BIT_L2 | BIT_L1)) != 0;
             if (has_priv_rt) {
+                // hard stop on heavy separators (e.g. '，') once we already
+                // have a privacy-sensitive tail; do not cross sentence-level
+                // punctuation into the next address.
+                if (heavySepAt(text, new_end) > 0) {
+                    std.log.debug("[zh-addr] right stop: heavy separator at pos={d}", .{new_end});
+                    break;
+                }
                 if (detectNextAddressHeadWithin(text, new_end, LOOKAHEAD_STOP)) {
                     std.log.debug("[zh-addr] right stop: lookahead head within {d} chars at pos={d}", .{ LOOKAHEAD_STOP, new_end });
                     break;
@@ -809,9 +943,10 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
                     std.log.debug("[zh-addr]   right reject tk level={s} (L8 duplicate) [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
                     continue;
                 }
-                if (canRightAttach(bits, tk.level, text, new_start, new_end, tk.start, tk.end)) {
-                    std.log.debug("[zh-addr]   right accept tk level={s} [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
-                    bits |= bitForLevel(tk.level);
+                const new_bits = canRightAttach(bits, tk.level, text, new_start, new_end, tk.start, tk.end);
+                if (new_bits != 0) {
+                    std.log.debug("[zh-addr]   right accept tk level={s} [{d},{d}) seg={s} new_bits=0x{x}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end], new_bits });
+                    bits = new_bits;
                     if (tk.start < new_start) {
                         // adjust new_start to the leftmost token
                         new_start = tk.start;
@@ -851,9 +986,10 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
                     std.log.debug("[zh-addr]   left reject tk level={s} (L8 duplicate) [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
                     continue;
                 }
-                if (canLeftAttach(bits, tk.level)) {
-                    std.log.debug("[zh-addr]   left accept tk level={s} [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
-                    bits |= bitForLevel(tk.level);
+                const new_bits = canLeftAttach(bits, tk.level, text, new_start, tk.start, tk.end);
+                if (new_bits != 0) {
+                    std.log.debug("[zh-addr]   left accept tk level={s} new_bits=0x{x} [{d},{d}) seg={s}", .{ levelName(tk.level), new_bits, tk.start, tk.end, text[tk.start..tk.end] });
+                    bits = new_bits;
                     new_start = tk.start;
                     std.log.debug("[zh-addr]   left new_start={d} bits=0x{x}", .{ new_start, bits });
                     accepted = true;
@@ -880,8 +1016,24 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
         out_sp.entity_type = .PHYSICAL_ADDRESS;
         out_sp.start = @intCast(new_start);
         out_sp.end = @intCast(new_end);
-        std.log.debug("[zh-addr] accept final span [{d},{d}) text={s}", .{ out_sp.start, out_sp.end, text[out_sp.start..out_sp.end] });
+        if (out_sp.score < 0.85) {
+            // fallback to 0.85 if score is too low
+            std.log.debug("[zh-addr] out_sp score too low={d}, set score to 0.85", .{out_sp.score});
+            out_sp.score = 0.85;
+        }
         try merged_zh.append(allocator, out_sp);
+        std.log.debug("[zh-addr] accept final span score={d} [{d},{d}) seg={s}", .{ out_sp.score, out_sp.start, out_sp.end, text[out_sp.start..out_sp.end] });
+
+        // mark subsequent seeds fully covered by this merged span as consumed
+        var j = idx + 1;
+        while (j < merged_adjacent.len) : (j += 1) {
+            const spj = merged_adjacent[j];
+            if (spj.start >= out_sp.start and spj.end <= out_sp.end and
+                (spj.entity_type == .PHYSICAL_ADDRESS or spj.entity_type == .ORGANIZATION))
+            {
+                consumed[j] = true;
+            }
+        }
     }
 
     return try merged_zh.toOwnedSlice(allocator);
@@ -956,6 +1108,17 @@ fn districtSuffixAt(text: []const u8, pos: usize) usize {
     return 0;
 }
 
+fn matchDistrictNameAt(text: []const u8, pos: usize) usize {
+    const NAMES = [_][]const u8{
+        "新界",
+    };
+    var i: usize = 0;
+    while (i < NAMES.len) : (i += 1) {
+        if (matchToken(text, pos, NAMES[i])) return NAMES[i].len;
+    }
+    return 0;
+}
+
 fn townshipSuffixAt(text: []const u8, pos: usize) usize {
     const SUF = [_][]const u8{
         "街道",    "镇",       "鎮",       "乡",                   "鄉",       "里",       "村",
@@ -972,7 +1135,7 @@ fn townshipSuffixAt(text: []const u8, pos: usize) usize {
 fn matchTownshipNameAt(text: []const u8, pos: usize) usize {
     // Lightweight HK/MO/CN township/area names (non-exhaustive)
     const NAMES = [_][]const u8{
-        "铜锣湾", "銅鑼灣", "北角", "荃湾", "荃灣", "将军澳", "將軍澳", "青衣",
+        "铜锣湾", "銅鑼灣", "北角", "荃湾", "荃灣", "将军澳", "將軍澳", "青衣", "上环", "上環",
     };
     var i: usize = 0;
     while (i < NAMES.len) : (i += 1) {
@@ -1067,6 +1230,15 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             i = e - 1;
             continue;
         }
+        const l8name = matchDistrictNameAt(text, i);
+        if (l8name > 0) {
+            const s = i;
+            const e = i + l8name;
+            bits |= BIT_L8;
+            try out_tokens.append(allocator, .{ .level = .L8_district, .start = @intCast(s), .end = @intCast(e) });
+            i = e - 1;
+            continue;
+        }
         const suf_dist = districtSuffixAt(text, i);
         if (suf_dist > 0) {
             const e = i + suf_dist;
@@ -1110,13 +1282,15 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             var has_digit = false;
             var dstart: usize = i;
             var steps: usize = 0;
-            while (p > start and steps < 12) : (steps += 1) {
+            // allow scanning across window start to find preceding digits (e.g. "...路75號")
+            while (p > 0 and steps < 6) : (steps += 1) {
                 p -= 1;
-                if (isAsciiLight(text[p])) break;
+                if (isAsciiLight(text[p])) continue;
                 if (isDigit(text[p])) {
                     has_digit = true;
                     dstart = p;
-                    while (dstart > start and isDigit(text[dstart - 1])) : (dstart -= 1) {}
+                    // backtrack to include all preceding digits, independent of window start
+                    while (dstart > 0 and isDigit(text[dstart - 1])) : (dstart -= 1) {}
                     break;
                 }
             }
@@ -1171,10 +1345,25 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
                 }
             }
             if (found_poi) {
-                bits |= BIT_L4;
-                try out_tokens.append(allocator, .{ .level = .L4_poi, .start = @intCast(i), .end = @intCast(poi_end) });
-                i = poi_end - 1;
-                continue;
+                // if there is a road suffix inside [i, poi_end), this POI span very likely
+                // covers a road like "德輔道中恒生大廈"。In that case we skip creating a POI
+                // starting at '德', so that later iterations can first recognize the road
+                // (e.g. "德輔道中") as L6 and then a POI starting at the true POI head
+                // (e.g. "恒生大廈").
+                const road_suffix_end = findRoadSuffixInsideEnd(text, i, poi_end);
+                if (road_suffix_end == 0) {
+                    bits |= BIT_L4;
+                    try out_tokens.append(allocator, .{ .level = .L4_poi, .start = @intCast(i), .end = @intCast(poi_end) });
+                    i = poi_end - 1;
+                    continue;
+                } else {
+                    std.log.debug("[zh-addr] The POI span covers a road = {s}", .{text[i..road_suffix_end]});
+                    bits |= BIT_L6 | BIT_L4;
+                    try out_tokens.append(allocator, .{ .level = .L6_road, .start = @intCast(i), .end = @intCast(road_suffix_end) });
+                    try out_tokens.append(allocator, .{ .level = .L4_poi, .start = @intCast(road_suffix_end), .end = @intCast(poi_end) });
+                    i = poi_end - 1;
+                    continue;
+                }
             }
         }
         const bu_len = buildingUnitAt(text, i);
