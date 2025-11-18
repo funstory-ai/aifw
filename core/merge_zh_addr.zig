@@ -75,7 +75,8 @@ fn endsWithPoiSuffix(text: []const u8, start: usize, end: usize) bool {
                 while (p < text.len and isAsciiLight(text[p])) : (p += 1) {}
                 if (p < text.len and
                     (matchToken(text, p, "区") or matchToken(text, p, "區") or
-                        matchToken(text, p, "县") or matchToken(text, p, "縣")))
+                        matchToken(text, p, "县") or matchToken(text, p, "縣") or
+                        matchToken(text, p, "市")))
                 {
                     return false;
                 }
@@ -842,9 +843,9 @@ fn canLeftAttach(
     if (high == 0) return current_bits; // first token in chain
     if (cand_l == high + 1) return current_bits | bitForLevel(cand_level);
 
-    // whitelist jump: L6 -> L8 for specific district names (e.g. "新界"),
+    // whitelist jump: L6 -> L8 for specific district names (e.g. "新界", "九龙"),
     if (high == levelRank(.L6_road) and cand_l == levelRank(.L8_district)) {
-        const special_l8_suffixes = &[_][]const u8{"新界"};
+        const special_l8_suffixes = &[_][]const u8{ "新界", "九龙", "九龍" };
         if (endsWithAny(text, cand_start, cand_end, special_l8_suffixes) and
             onlyLightBetween(text, cand_end, cur_start, 4))
         {
@@ -874,7 +875,6 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
     defer merged_zh.deinit(allocator);
 
     const SCAN_WIN: usize = 96; // characters scan window per step
-    const LOOKAHEAD_STOP: usize = 12; // characters
     const MAX_TOTAL_GROW_CHARS: usize = 48;
 
     var tokens_buf = try std.ArrayList(ZhToken).initCapacity(allocator, 16);
@@ -899,7 +899,7 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
         var bits: u32 = 0;
 
         tokens_buf.clearRetainingCapacity();
-        bits |= try zhTokenizeWindow(allocator, text, sp.start, sp.end, &tokens_buf);
+        bits |= try zhTokenizeWindow(allocator, text, sp.start, sp.end, &tokens_buf, &new_end);
         std.log.debug("[zh-addr] seed span: start={d} end={d} text={s}", .{ sp.start, sp.end, text[sp.start..sp.end] });
         std.log.debug("[zh-addr] seed tokens={d} bits=0x{x}", .{ tokens_buf.items.len, bits });
         for (tokens_buf.items) |tk| {
@@ -909,25 +909,20 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
         // right extension
         while (true) {
             if (countCharsBetween(text, sp.end, new_end) >= MAX_TOTAL_GROW_CHARS) break;
-            // front lookahead stop: only after reaching privacy threshold
+            // after reaching privacy threshold, do not cross heavy separators
+            // like '，' into the next clause.
             const has_priv_rt = (bits & (BIT_L5 | BIT_L4 | BIT_L3 | BIT_L2 | BIT_L1)) != 0;
             if (has_priv_rt) {
-                // hard stop on heavy separators (e.g. '，') once we already
-                // have a privacy-sensitive tail; do not cross sentence-level
-                // punctuation into the next address.
                 if (heavySepAt(text, new_end) > 0) {
                     std.log.debug("[zh-addr] right stop: heavy separator at pos={d}", .{new_end});
                     break;
                 }
-                if (detectNextAddressHeadWithin(text, new_end, LOOKAHEAD_STOP)) {
-                    std.log.debug("[zh-addr] right stop: lookahead head within {d} chars at pos={d}", .{ LOOKAHEAD_STOP, new_end });
-                    break;
-                }
             }
             const win_end = @min(text.len, new_end + SCAN_WIN);
+            var new_win_end: usize = win_end;
             if (win_end <= new_end) break;
             tokens_buf.clearRetainingCapacity();
-            _ = try zhTokenizeWindow(allocator, text, @intCast(new_end), @intCast(win_end), &tokens_buf);
+            _ = try zhTokenizeWindow(allocator, text, @intCast(new_end), @intCast(win_end), &tokens_buf, &new_win_end);
             std.log.debug("[zh-addr] right scan window=[{d},{d}) tokens={d} cur_bits=0x{x}", .{ new_end, win_end, tokens_buf.items.len, bits });
             if (tokens_buf.items.len == 0) {
                 std.log.debug("[zh-addr] right stop: no tokens in window", .{});
@@ -943,16 +938,24 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
                     std.log.debug("[zh-addr]   right reject tk level={s} (L8 duplicate) [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
                     continue;
                 }
+                // if we already reached privacy threshold and encounter a
+                // new high-level admin token (L8+), treat it as the head of
+                // the next address and stop extending the current one.
+                if (has_priv_rt and levelRank(tk.level) >= levelRank(.L8_district)) {
+                    std.log.debug("[zh-addr] right stop: new address head token level={s} [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
+                    accepted = false;
+                    break;
+                }
                 const new_bits = canRightAttach(bits, tk.level, text, new_start, new_end, tk.start, tk.end);
                 if (new_bits != 0) {
-                    std.log.debug("[zh-addr]   right accept tk level={s} [{d},{d}) seg={s} new_bits=0x{x}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end], new_bits });
+                    std.log.debug("[zh-addr]   right accept tk level={s} [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
                     bits = new_bits;
                     if (tk.start < new_start) {
                         // adjust new_start to the leftmost token
                         new_start = tk.start;
                     }
                     new_end = tk.end;
-                    std.log.debug("[zh-addr]   right new_end={d} bits=0x{x}", .{ new_end, bits });
+                    std.log.debug("[zh-addr]   right new_end={d} bits=0x{x}, seg={s}", .{ new_end, bits, text[new_start..new_end] });
                     accepted = true;
                     break;
                 } else {
@@ -970,7 +973,8 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
             const win_start = if (new_start > SCAN_WIN) new_start - SCAN_WIN else 0;
             if (win_start == new_start) break;
             tokens_buf.clearRetainingCapacity();
-            _ = try zhTokenizeWindow(allocator, text, @intCast(win_start), @intCast(new_start), &tokens_buf);
+            var new_win_end: usize = new_start;
+            _ = try zhTokenizeWindow(allocator, text, @intCast(win_start), @intCast(new_start), &tokens_buf, &new_win_end);
             std.log.debug("[zh-addr] left scan window=[{d},{d}) tokens={d} cur_bits=0x{x}", .{ win_start, new_start, tokens_buf.items.len, bits });
             if (tokens_buf.items.len == 0) {
                 std.log.debug("[zh-addr] left stop: no tokens in window", .{});
@@ -981,17 +985,16 @@ pub fn mergeZhAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans
             var j: isize = @as(isize, @intCast(tokens_buf.items.len)) - 1;
             while (j >= 0) : (j -= 1) {
                 const tk = tokens_buf.items[@as(usize, @intCast(j))];
-                if (tk.end > new_start) continue;
                 if (tk.level == .L8_district and (bits & BIT_L8) != 0) {
                     std.log.debug("[zh-addr]   left reject tk level={s} (L8 duplicate) [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
                     continue;
                 }
                 const new_bits = canLeftAttach(bits, tk.level, text, new_start, tk.start, tk.end);
                 if (new_bits != 0) {
-                    std.log.debug("[zh-addr]   left accept tk level={s} new_bits=0x{x} [{d},{d}) seg={s}", .{ levelName(tk.level), new_bits, tk.start, tk.end, text[tk.start..tk.end] });
+                    std.log.debug("[zh-addr]   left accept tk level={s} [{d},{d}) seg={s}", .{ levelName(tk.level), tk.start, tk.end, text[tk.start..tk.end] });
                     bits = new_bits;
                     new_start = tk.start;
-                    std.log.debug("[zh-addr]   left new_start={d} bits=0x{x}", .{ new_start, bits });
+                    std.log.debug("[zh-addr]   left new_start={d} bits=0x{x}, seg={s}", .{ new_start, bits, text[tk.start..new_end] });
                     accepted = true;
                     break;
                 } else {
@@ -1086,7 +1089,7 @@ fn matchCountryRegionAt(text: []const u8, pos: usize) usize {
 }
 
 fn provinceSuffixAt(text: []const u8, pos: usize) usize {
-    const SUF = [_][]const u8{ "省", "自治区", "自治州", "州", "盟", "地区", "特别行政区" };
+    const SUF = [_][]const u8{ "省", "自治区", "自治州", "盟", "地区", "特别行政区" };
     var i: usize = 0;
     while (i < SUF.len) : (i += 1) {
         if (matchToken(text, pos, SUF[i])) return SUF[i].len;
@@ -1095,7 +1098,19 @@ fn provinceSuffixAt(text: []const u8, pos: usize) usize {
 }
 
 fn citySuffixAt(text: []const u8, pos: usize) usize {
-    if (matchToken(text, pos, "市")) return "市".len;
+    // handle "市" specially to avoid treating common nouns like "城市" as
+    // administrative suffixes. For example, in "新城市廣場" we do NOT want
+    // the inner "市" to be recognized as a city-level suffix.
+    if (matchToken(text, pos, "市")) {
+        // avoid treating "...城市..." (common noun) as a city-level suffix.
+        // We check the previous UTF-8 codepoint: if it starts a "城市"
+        // sequence like "...城市廣場", we skip this "市" as admin suffix.
+        const prev = utf8PrevCpStart(text, pos);
+        if (prev < text.len and matchToken(text, prev, "城市")) {
+            return 0;
+        }
+        return "市".len;
+    }
     return 0;
 }
 
@@ -1110,7 +1125,7 @@ fn districtSuffixAt(text: []const u8, pos: usize) usize {
 
 fn matchDistrictNameAt(text: []const u8, pos: usize) usize {
     const NAMES = [_][]const u8{
-        "新界",
+        "新界", "九龙", "九龍",
     };
     var i: usize = 0;
     while (i < NAMES.len) : (i += 1) {
@@ -1121,9 +1136,10 @@ fn matchDistrictNameAt(text: []const u8, pos: usize) usize {
 
 fn townshipSuffixAt(text: []const u8, pos: usize) usize {
     const SUF = [_][]const u8{
-        "街道",    "镇",       "鎮",       "乡",                   "鄉",       "里",       "村",
-        "新区",    "高新区", "开发区", "经济技术开发区", "科技园", "科学园", "工业园",
-        "工业区", "产业园", "科技園", "科學園",             "工業園", "工業區", "產業園",
+        "街道",    "镇",                   "鎮",       "乡",       "鄉",
+        "开发区", "经济技术开发区", "科技园", "科学园", "工业园",
+        "工业区", "产业园",             "科技園", "科學園", "工業園",
+        "工業區", "產業園",
     };
     var i: usize = 0;
     while (i < SUF.len) : (i += 1) {
@@ -1173,10 +1189,10 @@ fn roomUnitAt(text: []const u8, pos: usize) usize {
     return 0;
 }
 
-fn findChunkStart(text: []const u8, end_pos: usize, max_chars: usize) usize {
+fn findChunkStart(text: []const u8, start_pos: usize, end_pos: usize, max_chars: usize) usize {
     var p = end_pos;
     var consumed: usize = 0;
-    while (p > 0 and consumed < max_chars) {
+    while (p > start_pos and consumed < max_chars) {
         const prev = utf8PrevCpStart(text, p);
         const b = text[prev];
         if (isAsciiLight(b) or heavySepAt(text, prev) > 0) break;
@@ -1195,8 +1211,42 @@ pub const ZhToken = struct {
     start: u32,
     end: u32,
 };
+/// Given an initial chunk start `s0` for a token whose suffix is at `suffix_pos`,
+/// trim the start so that we do not跨越上一个行政区或道路后缀边界。
+/// 例如 "江苏省南京市鼓楼区广州路" 中：
+/// - 在 "市" 处识别 L9_city 时，应当从 "南" 开始，而不是从 "江"；
+/// - 在 "区" 处识别 L8_district 时，应当从 "鼓" 开始；
+/// - 在 "路" 处识别 L6_road 时，应当从 "广" 开始，而不是从 "江"。
+fn adjustAdminRoadChunkStart(text: []const u8, addr_level: AddrLevel, s0: usize, suffix_pos: usize) usize {
+    var p: usize = s0;
+    var last_end: usize = s0;
+    const maybe_check_fn: ?*const fn (text: []const u8, pos: usize) usize = switch (addr_level) {
+        .L10_province => &matchCountryRegionAt,
+        .L9_city => &provinceSuffixAt,
+        .L8_district => &citySuffixAt,
+        .L7_township => &districtSuffixAt,
+        .L6_road => &townshipSuffixAt,
+        else => null,
+    };
 
-pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u32, end: u32, out_tokens: *std.ArrayList(ZhToken)) !u32 {
+    const check_fn = maybe_check_fn orelse {
+        return s0;
+    };
+    while (p < suffix_pos) {
+        const admin_len = check_fn(text, p);
+        if (admin_len > 0) {
+            last_end = p + admin_len;
+            p += admin_len;
+            continue;
+        }
+        const utf8_char_len = utf8CpLenAt(text, p);
+        if (utf8_char_len == 0) break;
+        p += utf8_char_len;
+    }
+    return last_end;
+}
+
+pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u32, end: u32, out_tokens: *std.ArrayList(ZhToken), new_end: *usize) !u32 {
     var bits: u32 = 0;
     if (end <= start or end > text.len) return 0;
     var i: usize = start;
@@ -1209,24 +1259,29 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             const e = i + l11;
             bits |= BIT_L11;
             try out_tokens.append(allocator, .{ .level = .L11_country_region, .start = @intCast(s), .end = @intCast(e) });
+            new_end.* = e;
             i = e - 1;
             continue;
         }
         const suf_prov = provinceSuffixAt(text, i);
         if (suf_prov > 0) {
             const e = i + suf_prov;
-            const s = findChunkStart(text, i, 32);
+            const s0 = findChunkStart(text, start, i, 32);
+            const s = adjustAdminRoadChunkStart(text, .L10_province, s0, i);
             bits |= BIT_L10;
             try out_tokens.append(allocator, .{ .level = .L10_province, .start = @intCast(s), .end = @intCast(e) });
+            new_end.* = e;
             i = e - 1;
             continue;
         }
         const suf_city = citySuffixAt(text, i);
         if (suf_city > 0) {
             const e = i + suf_city;
-            const s = findChunkStart(text, i, 24);
+            const s0 = findChunkStart(text, start, i, 24);
+            const s = adjustAdminRoadChunkStart(text, .L9_city, s0, i);
             bits |= BIT_L9;
             try out_tokens.append(allocator, .{ .level = .L9_city, .start = @intCast(s), .end = @intCast(e) });
+            new_end.* = e;
             i = e - 1;
             continue;
         }
@@ -1236,15 +1291,18 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             const e = i + l8name;
             bits |= BIT_L8;
             try out_tokens.append(allocator, .{ .level = .L8_district, .start = @intCast(s), .end = @intCast(e) });
+            new_end.* = e;
             i = e - 1;
             continue;
         }
         const suf_dist = districtSuffixAt(text, i);
         if (suf_dist > 0) {
             const e = i + suf_dist;
-            const s = findChunkStart(text, i, 24);
+            const s0 = findChunkStart(text, start, i, 24);
+            const s = adjustAdminRoadChunkStart(text, .L8_district, s0, i);
             bits |= BIT_L8;
             try out_tokens.append(allocator, .{ .level = .L8_district, .start = @intCast(s), .end = @intCast(e) });
+            new_end.* = e;
             i = e - 1;
             continue;
         }
@@ -1254,24 +1312,29 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             const e = i + l7name;
             bits |= BIT_L7;
             try out_tokens.append(allocator, .{ .level = .L7_township, .start = @intCast(s), .end = @intCast(e) });
+            new_end.* = e;
             i = e - 1;
             continue;
         }
         const suf_town = townshipSuffixAt(text, i);
         if (suf_town > 0) {
             const e = i + suf_town;
-            const s = findChunkStart(text, i, 24);
+            const s0 = findChunkStart(text, start, i, 24);
+            const s = adjustAdminRoadChunkStart(text, .L7_township, s0, i);
             bits |= BIT_L7;
             try out_tokens.append(allocator, .{ .level = .L7_township, .start = @intCast(s), .end = @intCast(e) });
+            new_end.* = e;
             i = e - 1;
             continue;
         }
         const suf_road = roadSuffixAt(text, i);
         if (suf_road > 0) {
             const e = i + suf_road;
-            const s = findChunkStart(text, i, 32);
+            const s0 = findChunkStart(text, start, i, 32);
+            const s = adjustAdminRoadChunkStart(text, .L6_road, s0, i);
             bits |= BIT_L6;
             try out_tokens.append(allocator, .{ .level = .L6_road, .start = @intCast(s), .end = @intCast(e) });
+            new_end.* = e;
             i = e - 1;
             continue;
         }
@@ -1282,8 +1345,7 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             var has_digit = false;
             var dstart: usize = i;
             var steps: usize = 0;
-            // allow scanning across window start to find preceding digits (e.g. "...路75號")
-            while (p > 0 and steps < 6) : (steps += 1) {
+            while (p > start and steps < 8) : (steps += 1) {
                 p -= 1;
                 if (isAsciiLight(text[p])) continue;
                 if (isDigit(text[p])) {
@@ -1314,6 +1376,7 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
                 }
                 bits |= BIT_L5;
                 try out_tokens.append(allocator, .{ .level = .L5_house_no, .start = @intCast(dstart), .end = @intCast(e) });
+                new_end.* = e;
                 i = e - 1;
                 continue;
             }
@@ -1354,6 +1417,7 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
                 if (road_suffix_end == 0) {
                     bits |= BIT_L4;
                     try out_tokens.append(allocator, .{ .level = .L4_poi, .start = @intCast(i), .end = @intCast(poi_end) });
+                    new_end.* = poi_end;
                     i = poi_end - 1;
                     continue;
                 } else {
@@ -1361,6 +1425,7 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
                     bits |= BIT_L6 | BIT_L4;
                     try out_tokens.append(allocator, .{ .level = .L6_road, .start = @intCast(i), .end = @intCast(road_suffix_end) });
                     try out_tokens.append(allocator, .{ .level = .L4_poi, .start = @intCast(road_suffix_end), .end = @intCast(poi_end) });
+                    new_end.* = poi_end;
                     i = poi_end - 1;
                     continue;
                 }
@@ -1373,7 +1438,7 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             var has_alpha_letter = false;
             var dstart2: usize = i;
             var steps2: usize = 0;
-            while (p > start and steps2 < 12) : (steps2 += 1) {
+            while (p > start and steps2 < 8) : (steps2 += 1) {
                 p -= 1;
                 if (isAsciiLight(text[p])) continue; // skip light separators when scanning back for letters/digits
                 if (isDigit(text[p])) {
@@ -1395,12 +1460,14 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
                 const e = i + bu_len;
                 bits |= BIT_L3;
                 try out_tokens.append(allocator, .{ .level = .L3_building, .start = @intCast(dstart2), .end = @intCast(e) });
+                new_end.* = e;
                 i = e - 1;
                 continue;
             } else if (has_alpha_letter) {
                 const e = i + bu_len;
                 bits |= BIT_L3;
                 try out_tokens.append(allocator, .{ .level = .L3_building, .start = @intCast(dstart2), .end = @intCast(e) });
+                new_end.* = e;
                 i = e - 1;
                 continue;
             }
@@ -1411,7 +1478,7 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             var has_digit = false;
             var dstart3: usize = i;
             var steps3: usize = 0;
-            while (p > 0 and steps3 < 8) : (steps3 += 1) {
+            while (p > start and steps3 < 8) : (steps3 += 1) {
                 p -= 1;
                 if (isAsciiLight(text[p])) break;
                 if (isDigit(text[p])) {
@@ -1425,6 +1492,7 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
                 const e = i + fu_len;
                 bits |= BIT_L2;
                 try out_tokens.append(allocator, .{ .level = .L2_floor, .start = @intCast(dstart3), .end = @intCast(e) });
+                new_end.* = e;
                 i = e - 1;
                 continue;
             }
@@ -1435,6 +1503,7 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             if (q > d0) {
                 bits |= BIT_L2;
                 try out_tokens.append(allocator, .{ .level = .L2_floor, .start = @intCast(i), .end = @intCast(q) });
+                new_end.* = q;
                 i = q - 1;
                 continue;
             }
@@ -1448,6 +1517,7 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             if (q > d0) {
                 bits |= BIT_L1;
                 try out_tokens.append(allocator, .{ .level = .L1_unit_room, .start = @intCast(i), .end = @intCast(q) });
+                new_end.* = q;
                 i = q - 1;
                 continue;
             }
@@ -1456,9 +1526,10 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
         if (ru_len > 0) {
             var p = i;
             var has_digit = false;
+            var has_alpha_letter = false;
             var dstart4: usize = i;
             var steps4: usize = 0;
-            while (p > 0 and steps4 < 8) : (steps4 += 1) {
+            while (p > start and steps4 < 8) : (steps4 += 1) {
                 p -= 1;
                 if (isAsciiLight(text[p])) break;
                 if (isDigit(text[p])) {
@@ -1467,18 +1538,23 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
                     while (dstart4 > start and isDigit(text[dstart4 - 1])) : (dstart4 -= 1) {}
                     break;
                 }
+                if (isAsciiAlpha(text[p])) {
+                    has_alpha_letter = true;
+                    dstart4 = p;
+                    while (dstart4 > start and isAsciiAlpha(text[dstart4 - 1])) : (dstart4 -= 1) {}
+                    break;
+                }
             }
-            if (has_digit) {
+            if (has_digit or has_alpha_letter) {
                 const e = i + ru_len;
                 bits |= BIT_L1;
                 try out_tokens.append(allocator, .{ .level = .L1_unit_room, .start = @intCast(dstart4), .end = @intCast(e) });
+                new_end.* = e;
                 i = e - 1;
                 continue;
             }
         }
     }
-
-    if (out_tokens.items.len < 2) return bits;
 
     // Check if there has a token level lower than last token level,
     // if so, clear this token's bit and remove this token from out_tokens
@@ -1505,7 +1581,8 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
 pub fn addrDepthRank(allocator: std.mem.Allocator, text: []const u8, start: u32, end: u32) u8 {
     var toks = std.ArrayList(ZhToken).init(allocator);
     defer toks.deinit(allocator);
-    const bits = zhTokenizeWindow(allocator, text, start, end, &toks) catch 0;
+    var new_end: usize = 0;
+    const bits = try zhTokenizeWindow(allocator, text, start, end, &toks, &new_end);
     if ((bits & BIT_L1) != 0) return 1;
     if ((bits & BIT_L2) != 0) return 2;
     if ((bits & BIT_L3) != 0) return 3;
