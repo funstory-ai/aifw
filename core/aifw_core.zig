@@ -11,7 +11,7 @@ const is_freestanding = builtin.target.os.tag == .freestanding;
 // When targeting wasm32-freestanding, route std.log to an extern JS-provided logger.
 // Otherwise, use Zig's default logger.
 pub const std_options = std.Options{
-    .log_level = .debug,
+    .log_level = .info,
     .logFn = logFn,
 };
 

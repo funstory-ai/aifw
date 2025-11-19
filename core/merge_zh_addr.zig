@@ -39,7 +39,7 @@ fn matchToken(text: []const u8, pos: usize, token: []const u8) bool {
 }
 
 fn heavySepAt(text: []const u8, pos: usize) usize {
-    const HEAVY = [_][]const u8{ "。", "！", "？", "；", "：", "、", "，", "（", "）", "/", "\\", "|" };
+    const HEAVY = [_][]const u8{ "。", "！", "？", "；", "：", "、", "（", "）", "/", "\\", "|" };
     var i: usize = 0;
     while (i < HEAVY.len) : (i += 1) {
         if (matchToken(text, pos, HEAVY[i])) return HEAVY[i].len;
@@ -147,8 +147,8 @@ fn highestRankInBits(bits: u32) u8 {
 fn lowestRankInBits(bits: u32) u8 {
     const checked_bits = bits & LEVEL_BITS_MASK;
     if (checked_bits == 0) return 0;
-    const trail_zero_bits = @ctz(checked_bits);
-    return trail_zero_bits - (LEVEL_BIT_OFFSET - 1);
+    const tail_zero_bits = @ctz(checked_bits);
+    return tail_zero_bits - (LEVEL_BIT_OFFSET - 1);
 }
 
 fn mergeAdjacentAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans_in: []const RecogEntity) ![]RecogEntity {
@@ -886,6 +886,8 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
             }
         }
     }
+
+    if (out_tokens.items.len < 2) return bits;
 
     // Check if there has a token level lower than last token level,
     // if so, clear this token's bit and remove this token from out_tokens
