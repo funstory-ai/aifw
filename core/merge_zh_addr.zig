@@ -88,31 +88,36 @@ fn endsWithAny(text: []const u8, start: usize, end: usize, toks: []const []const
 
 /// Address level enum. Each bit in the u32 bits represents a address level.
 /// The u32 bits is a bitmask of all the address levels.
-pub const AddrLevel = enum(u8) {
-    L11_country_region,
-    L10_province,
-    L9_city,
-    L8_district,
-    L7_township,
-    L6_road,
-    L5_house_no,
-    L4_poi,
-    L3_building,
+/// The bits range is from bit8 to bit18.
+pub const AddrLevel = enum(u5) {
+    L1_unit_room = 1,
     L2_floor,
-    L1_unit_room,
+    L3_building,
+    L4_poi,
+    L5_house_no,
+    L6_road,
+    L7_township,
+    L8_district,
+    L9_city,
+    L10_province,
+    L11_country_region,
 };
 
-const BIT_L11: u32 = 1 << 19;
-const BIT_L10: u32 = 1 << 18;
-const BIT_L9: u32 = 1 << 17;
-const BIT_L8: u32 = 1 << 16;
-const BIT_L7: u32 = 1 << 15;
-const BIT_L6: u32 = 1 << 14;
-const BIT_L5: u32 = 1 << 13;
-const BIT_L4: u32 = 1 << 12;
-const BIT_L3: u32 = 1 << 11;
-const BIT_L2: u32 = 1 << 10;
-const BIT_L1: u32 = 1 << 9;
+const LEVEL_BIT_OFFSET = 8;
+const LEVEL_BITS_LEN = @intFromEnum(AddrLevel.L11_country_region) - @intFromEnum(AddrLevel.L1_unit_room) + 1;
+const LEVEL_BITS_MASK = ((1 << LEVEL_BITS_LEN) - 1) << LEVEL_BIT_OFFSET;
+
+const BIT_L1: u32 = 1 << (LEVEL_BIT_OFFSET + 0);
+const BIT_L2: u32 = 1 << (LEVEL_BIT_OFFSET + 1);
+const BIT_L3: u32 = 1 << (LEVEL_BIT_OFFSET + 2);
+const BIT_L4: u32 = 1 << (LEVEL_BIT_OFFSET + 3);
+const BIT_L5: u32 = 1 << (LEVEL_BIT_OFFSET + 4);
+const BIT_L6: u32 = 1 << (LEVEL_BIT_OFFSET + 5);
+const BIT_L7: u32 = 1 << (LEVEL_BIT_OFFSET + 6);
+const BIT_L8: u32 = 1 << (LEVEL_BIT_OFFSET + 7);
+const BIT_L9: u32 = 1 << (LEVEL_BIT_OFFSET + 8);
+const BIT_L10: u32 = 1 << (LEVEL_BIT_OFFSET + 9);
+const BIT_L11: u32 = 1 << (LEVEL_BIT_OFFSET + 10);
 
 pub const TokenSpan = struct {
     level: AddrLevel,
@@ -124,66 +129,26 @@ fn levelName(lv: AddrLevel) []const u8 {
     return @tagName(lv);
 }
 
-fn bitForLevel(lv: AddrLevel) u32 {
-    return switch (lv) {
-        .L11_country_region => BIT_L11,
-        .L10_province => BIT_L10,
-        .L9_city => BIT_L9,
-        .L8_district => BIT_L8,
-        .L7_township => BIT_L7,
-        .L6_road => BIT_L6,
-        .L5_house_no => BIT_L5,
-        .L4_poi => BIT_L4,
-        .L3_building => BIT_L3,
-        .L2_floor => BIT_L2,
-        .L1_unit_room => BIT_L1,
-    };
+fn bitFromLevel(lv: AddrLevel) u32 {
+    return @as(u32, 1) << @as(u5, @intFromEnum(lv) + (LEVEL_BIT_OFFSET - 1));
 }
 
 fn levelRank(lv: AddrLevel) u8 {
-    return switch (lv) {
-        .L11_country_region => 11,
-        .L10_province => 10,
-        .L9_city => 9,
-        .L8_district => 8,
-        .L7_township => 7,
-        .L6_road => 6,
-        .L5_house_no => 5,
-        .L4_poi => 4,
-        .L3_building => 3,
-        .L2_floor => 2,
-        .L1_unit_room => 1,
-    };
+    return @intFromEnum(lv);
 }
 
 fn highestRankInBits(bits: u32) u8 {
-    var r: u8 = 0;
-    if ((bits & BIT_L11) != 0) r = @max(r, levelRank(.L11_country_region));
-    if ((bits & BIT_L10) != 0) r = @max(r, levelRank(.L10_province));
-    if ((bits & BIT_L9) != 0) r = @max(r, levelRank(.L9_city));
-    if ((bits & BIT_L8) != 0) r = @max(r, levelRank(.L8_district));
-    if ((bits & BIT_L7) != 0) r = @max(r, levelRank(.L7_township));
-    if ((bits & BIT_L6) != 0) r = @max(r, levelRank(.L6_road));
-    if ((bits & BIT_L5) != 0) r = @max(r, levelRank(.L5_house_no));
-    if ((bits & BIT_L4) != 0) r = @max(r, levelRank(.L4_poi));
-    if ((bits & BIT_L3) != 0) r = @max(r, levelRank(.L3_building));
-    if ((bits & BIT_L2) != 0) r = @max(r, levelRank(.L2_floor));
-    if ((bits & BIT_L1) != 0) r = @max(r, levelRank(.L1_unit_room));
-    return r;
+    const checked_bits = bits & LEVEL_BITS_MASK;
+    if (checked_bits == 0) return 0;
+    const lead_zero_bits = @clz(checked_bits);
+    return (31 - lead_zero_bits) - (LEVEL_BIT_OFFSET - 1);
 }
 
 fn lowestRankInBits(bits: u32) u8 {
-    var r: u8 = 0;
-    inline for (.{
-        .L1_unit_room, .L2_floor,    .L3_building, .L4_poi,       .L5_house_no,        .L6_road,
-        .L7_township,  .L8_district, .L9_city,     .L10_province, .L11_country_region,
-    }) |lv| {
-        if ((bits & bitForLevel(lv)) != 0) {
-            r = levelRank(lv);
-            break;
-        }
-    }
-    return r;
+    const checked_bits = bits & LEVEL_BITS_MASK;
+    if (checked_bits == 0) return 0;
+    const trail_zero_bits = @ctz(checked_bits);
+    return trail_zero_bits - (LEVEL_BIT_OFFSET - 1);
 }
 
 fn mergeAdjacentAddressSpans(allocator: std.mem.Allocator, text: []const u8, spans_in: []const RecogEntity) ![]RecogEntity {
@@ -254,16 +219,16 @@ fn canRightAttach(
     const low = lowestRankInBits(current_bits);
     const cand_r = levelRank(cand_level);
     // first token in chain: accept any candidate level and set its bit
-    if (low == 0) return current_bits | bitForLevel(cand_level);
+    if (low == 0) return current_bits | bitFromLevel(cand_level);
     // strict adjacency
-    if (cand_r + 1 == low) return current_bits | bitForLevel(cand_level);
+    if (cand_r + 1 == low) return current_bits | bitFromLevel(cand_level);
     // whitelist jump: L11 -> L7 (country region directly to township)
     if (low == levelRank(.L11_country_region) and cand_r == levelRank(.L7_township)) {
         const special_l11_suffixes = &[_][]const u8{"香港"};
         if (onlyLightBetween(text, cur_end, cand_start, 4) and
             endsWithAny(text, cur_start, cur_end, special_l11_suffixes))
         {
-            return current_bits | bitForLevel(cand_level);
+            return current_bits | bitFromLevel(cand_level);
         }
     }
     // whitelist jump: L7 -> L3 (township directly to building)
@@ -272,7 +237,7 @@ fn canRightAttach(
         if (onlyLightBetween(text, cur_end, cand_start, 4) and
             endsWithAny(text, cur_start, cur_end, special_l7_suffixes))
         {
-            return current_bits | bitForLevel(cand_level);
+            return current_bits | bitFromLevel(cand_level);
         }
     }
     // whitelist jump: L5 -> L7 (house number directly to township)
@@ -280,20 +245,20 @@ fn canRightAttach(
         const special_l7_suffixes = &[_][]const u8{ "科技园", "科学园", "工业园", "工业区", "产业园", "科技園", "科學園", "工業園", "工業區", "產業園" };
         if (endsWithAny(text, cand_start, cand_end, special_l7_suffixes)) {
             if ((cand_start <= cur_end and cand_end > cur_end) or nearCharsBetween(text, cur_end, cand_start, 4)) {
-                return current_bits | bitForLevel(cand_level);
+                return current_bits | bitFromLevel(cand_level);
             }
         }
     }
     // whitelist jump: L6 -> L4 (road directly to POI), allow near distance (<=4 chars)
     if (low == levelRank(.L6_road) and cand_r == levelRank(.L4_poi)) {
         if (onlyLightBetween(text, cur_end, cand_start, 4)) {
-            return current_bits | bitForLevel(cand_level);
+            return current_bits | bitFromLevel(cand_level);
         }
     }
     // whiteList jump: L5 -> L2 (house number directly to floor), allow near distance (<=4 chars)
     if (low == levelRank(.L5_house_no) and cand_r == levelRank(.L2_floor)) {
         if (nearCharsBetween(text, cur_end, cand_start, 4)) {
-            return current_bits | bitForLevel(cand_level);
+            return current_bits | bitFromLevel(cand_level);
         }
     }
     // whitelist jump: L4 -> L6 (POI directly to road), allow overlap attach
@@ -301,37 +266,37 @@ fn canRightAttach(
         // For special cases like "沙田银城 + 街 = 沙田银城街", allow overlap attach road tokan just only has road suffix.
         if (cur_end + roadSuffixAt(text, cur_end) == cand_end) {
             // clear L4 bit to avoid can not right attach L5, because L5 can not attach to L4.
-            return (current_bits | bitForLevel(cand_level)) & ~BIT_L4;
+            return (current_bits | bitFromLevel(cand_level)) & ~BIT_L4;
         }
     }
     // whitelist jump: L4 -> L2 (POI directly to floor), allow near distance (<=4 chars)
     if (low == levelRank(.L4_poi) and cand_r == levelRank(.L2_floor)) {
         if (nearCharsBetween(text, cur_end, cand_start, 4)) {
-            return current_bits | bitForLevel(cand_level);
+            return current_bits | bitFromLevel(cand_level);
         }
     }
     // whitelist jump: L4 -> L1 (POI directly to room), allow near distance (<=4 chars)
     if (low == levelRank(.L4_poi) and cand_r == levelRank(.L1_unit_room)) {
         if (nearCharsBetween(text, cur_end, cand_start, 5)) {
-            return current_bits | bitForLevel(cand_level);
+            return current_bits | bitFromLevel(cand_level);
         }
     }
     // whitelist jump: L3 -> L1 (building directly to room)
     if (low == levelRank(.L3_building) and cand_r == levelRank(.L1_unit_room)) {
         if (nearCharsBetween(text, cur_end, cand_start, 6)) {
-            return current_bits | bitForLevel(cand_level);
+            return current_bits | bitFromLevel(cand_level);
         }
     }
     // whitelist jump: L8 -> L6 (district directly to road), allow overlap attach
     if (low == levelRank(.L8_district) and cand_r == levelRank(.L6_road)) {
         if (cand_start <= cur_end and cand_end > cur_end) {
-            return current_bits | bitForLevel(cand_level);
+            return current_bits | bitFromLevel(cand_level);
         }
     }
     // whitelist jump: L9 -> L6 (city directly to road), allow overlap attach
     if (low == levelRank(.L9_city) and cand_r == levelRank(.L6_road)) {
         if (cand_start <= cur_end and cand_end > cur_end) {
-            return current_bits | bitForLevel(cand_level);
+            return current_bits | bitFromLevel(cand_level);
         }
     }
     return 0;
@@ -349,7 +314,7 @@ fn canLeftAttach(
     const high = highestRankInBits(current_bits);
     const cand_l = levelRank(cand_level);
     if (high == 0) return current_bits; // first token in chain
-    if (cand_l == high + 1) return current_bits | bitForLevel(cand_level);
+    if (cand_l == high + 1) return current_bits | bitFromLevel(cand_level);
 
     // whitelist jump: L6 -> L8 for specific district names (e.g. "新界", "九龙"),
     if (high == levelRank(.L6_road) and cand_l == levelRank(.L8_district)) {
@@ -357,7 +322,7 @@ fn canLeftAttach(
         if (endsWithAny(text, cand_start, cand_end, special_l8_suffixes) and
             onlyLightBetween(text, cand_end, cur_start, 4))
         {
-            return current_bits | bitForLevel(cand_level);
+            return current_bits | bitFromLevel(cand_level);
         }
     }
     return 0;
@@ -929,7 +894,7 @@ pub fn zhTokenizeWindow(allocator: std.mem.Allocator, text: []const u8, start: u
     while (idx >= 0) : (idx -= 1) {
         const tk = out_tokens.items[@intCast(idx)];
         if (levelRank(tk.level) < levelRank(last_level)) {
-            bits &= ~bitForLevel(tk.level);
+            bits &= ~bitFromLevel(tk.level);
             _ = out_tokens.orderedRemove(@intCast(idx));
             std.log.debug("[zh-addr] remove token seg={s} level={s} less than last level={s} [{d},{d})", .{
                 text[tk.start..tk.end],
