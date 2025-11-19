@@ -11,7 +11,7 @@ const is_freestanding = builtin.target.os.tag == .freestanding;
 // When targeting wasm32-freestanding, route std.log to an extern JS-provided logger.
 // Otherwise, use Zig's default logger.
 pub const std_options = std.Options{
-    .log_level = .debug,
+    .log_level = .info,
     .logFn = logFn,
 };
 
@@ -478,9 +478,22 @@ pub const MaskPipeline = struct {
                     var combined = try std.ArrayList(RecogEntity).initCapacity(self.allocator, merged.items.len + addr_spans.len);
                     defer combined.deinit(self.allocator);
 
-                    // Keep all non-address/non-organization entities from original merged list.
+                    // Keep all non-address entities from original merged list. For ORGANIZATION
+                    // entities, only keep those that are not fully covered by any merged address
+                    // span, so that address spans take precedence when they already capture a
+                    // full address (including POI/floor) like "K11購物藝術館6樓".
                     for (merged.items) |sp| {
                         if (sp.entity_type == .PHYSICAL_ADDRESS) continue;
+                        if (sp.entity_type == .ORGANIZATION) {
+                            var covered: bool = false;
+                            for (addr_spans) |addr_sp| {
+                                if (addr_sp.start <= sp.start and addr_sp.end >= sp.end) {
+                                    covered = true;
+                                    break;
+                                }
+                            }
+                            if (covered) continue;
+                        }
                         try combined.append(self.allocator, sp);
                     }
                     // Add merged/extended address spans.
