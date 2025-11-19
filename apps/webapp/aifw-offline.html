@@ -55,8 +55,12 @@
 
       async function main() {
         statusEl.textContent = 'Initializing AIFW...';
-        // await aifw.init({ wasmBase: './vendor/aifw-js/wasm/', modelsBase: './vendor/aifw-js/models/' });
-        await aifw.init();
+        // await aifw.init({
+        //    wasmBase: './vendor/aifw-js/wasm/',
+        //    modelsBase: './vendor/aifw-js/models/',
+        //    maskConfig: {maskAll: true}
+        //    });
+        await aifw.init({maskConfig: {maskAll: true}});
         statusEl.textContent = 'AIFW initialized.';
 
         let shutdownCalled = false;

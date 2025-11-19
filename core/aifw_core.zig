@@ -11,7 +11,7 @@ const is_freestanding = builtin.target.os.tag == .freestanding;
 // When targeting wasm32-freestanding, route std.log to an extern JS-provided logger.
 // Otherwise, use Zig's default logger.
 pub const std_options = std.Options{
-    .log_level = .info,
+    .log_level = .debug,
     .logFn = logFn,
 };
 
@@ -255,7 +255,84 @@ fn deserialize_mask_meta_data(serialized_mask_meta_data: []const u8) MaskMetaDat
     };
 }
 
+const ENABLE_MASK_ADDR_BIT = 1 << 0;
+const ENABLE_MASK_EMAIL_BIT = 1 << 1;
+const ENABLE_MASK_ORG_BIT = 1 << 2;
+const ENABLE_MASK_USER_NAME_BIT = 1 << 3;
+const ENABLE_MASK_PHONE_NUMBER_BIT = 1 << 4;
+const ENABLE_MASK_BANK_NUMBER_BIT = 1 << 5;
+const ENABLE_MASK_PAYMENT_BIT = 1 << 6;
+const ENABLE_MASK_VCODE_BIT = 1 << 7;
+const ENABLE_MASK_PASSWORD_BIT = 1 << 8;
+const ENABLE_MASK_RANDOM_SEED_BIT = 1 << 9;
+const ENABLE_MASK_PRIVATE_KEY_BIT = 1 << 10;
+const ENABLE_MASK_URL_ADDRESS_BIT = 1 << 11;
+const ENABLE_MASK_ALL_BITS =
+    ENABLE_MASK_ADDR_BIT |
+    ENABLE_MASK_EMAIL_BIT |
+    ENABLE_MASK_ORG_BIT |
+    ENABLE_MASK_USER_NAME_BIT |
+    ENABLE_MASK_PHONE_NUMBER_BIT |
+    ENABLE_MASK_BANK_NUMBER_BIT |
+    ENABLE_MASK_PAYMENT_BIT |
+    ENABLE_MASK_VCODE_BIT |
+    ENABLE_MASK_PASSWORD_BIT |
+    ENABLE_MASK_RANDOM_SEED_BIT |
+    ENABLE_MASK_PRIVATE_KEY_BIT |
+    ENABLE_MASK_URL_ADDRESS_BIT;
+
+pub const MaskConfig = extern struct {
+    enable_mask_bits: u32 = default_mask_bits,
+    pub const default_mask_bits: u32 = ENABLE_MASK_ALL_BITS & ~@as(u32, ENABLE_MASK_ADDR_BIT);
+
+    fn bitFromEntityType(entity_type: EntityType) u32 {
+        return switch (entity_type) {
+            .PHYSICAL_ADDRESS => ENABLE_MASK_ADDR_BIT,
+            .EMAIL_ADDRESS => ENABLE_MASK_EMAIL_BIT,
+            .ORGANIZATION => ENABLE_MASK_ORG_BIT,
+            .USER_MAME => ENABLE_MASK_USER_NAME_BIT,
+            .PHONE_NUMBER => ENABLE_MASK_PHONE_NUMBER_BIT,
+            .BANK_NUMBER => ENABLE_MASK_BANK_NUMBER_BIT,
+            .PAYMENT => ENABLE_MASK_PAYMENT_BIT,
+            .VERIFICATION_CODE => ENABLE_MASK_VCODE_BIT,
+            .PASSWORD => ENABLE_MASK_PASSWORD_BIT,
+            .RANDOM_SEED => ENABLE_MASK_RANDOM_SEED_BIT,
+            .PRIVATE_KEY => ENABLE_MASK_PRIVATE_KEY_BIT,
+            .URL_ADDRESS => ENABLE_MASK_URL_ADDRESS_BIT,
+            // Non-PII or unsupported types are never masked.
+            else => 0,
+        };
+    }
+
+    pub fn getEnableAllMaskConfig() MaskConfig {
+        return .{ .enable_mask_bits = ENABLE_MASK_ALL_BITS };
+    }
+
+    pub fn getDisableAllMaskConfig() MaskConfig {
+        return .{ .enable_mask_bits = 0 };
+    }
+
+    pub fn enableMaskEntityType(self: *MaskConfig, entity_type: EntityType) MaskConfig {
+        const bit: u32 = bitFromEntityType(entity_type);
+        self.enable_mask_bits |= bit;
+        return self;
+    }
+
+    pub fn disableMaskEntityType(self: *MaskConfig, entity_type: EntityType) MaskConfig {
+        const bit: u32 = bitFromEntityType(entity_type);
+        self.enable_mask_bits &= ~bit;
+        return self;
+    }
+
+    /// Return whether the given entity type should be anonymized according to enable_mask_bits.
+    pub fn isEnabled(self: MaskConfig, entity_type: EntityType) bool {
+        const bit: u32 = bitFromEntityType(entity_type);
+        return (self.enable_mask_bits & bit) != 0;
+    }
+};
+
 pub const MaskInitArgs = struct {
+    mask_config: MaskConfig,
     regex_list: []const RegexRecognizer,
     ner_recognizer: *const NerRecognizer,
 };
@@ -343,6 +420,7 @@ pub const Pipeline = union(PipelineKind) {
 
 pub const MaskPipeline = struct {
     allocator: std.mem.Allocator,
+    mask_config: MaskConfig,
     // components
     regex_list: []const RegexRecognizer,
     ner_recognizer: *const NerRecognizer,
@@ -350,6 +428,7 @@ pub const MaskPipeline = struct {
     pub fn init(allocator: std.mem.Allocator, init_args: MaskInitArgs) MaskPipeline {
         return .{
             .allocator = allocator,
+            .mask_config = init_args.mask_config,
             .regex_list = init_args.regex_list,
             .ner_recognizer = init_args.ner_recognizer,
         };
@@ -379,21 +458,42 @@ pub const MaskPipeline = struct {
             try merged.appendSlice(self.allocator, regex_ents);
             self.allocator.free(regex_ents);
         }
+        std.log.debug("[mask] all regex ents count = {d}", .{merged.items.len});
+
         // 3) NER results from args
         const ner_ents = try self.ner_recognizer.run(args.ner_data);
-        std.log.debug("[mask] ner ents += {d}", .{ner_ents.len});
+        std.log.debug("[mask] ner ents count = {d}", .{ner_ents.len});
         try merged.appendSlice(self.allocator, ner_ents);
         self.allocator.free(ner_ents);
 
-        // 3.1) Optional zh-specific address merge
-        const merged_address_spans = switch (args.language) {
-            .zh, .zh_cn, .zh_tw, .zh_hk, .zh_hans, .zh_hant => try merge_zh.mergeZhAddressSpans(self.allocator, original_text, merged.items),
-            else => try self.allocator.dupe(RecogEntity, merged.items),
+        // 3.1) Optional zh-specific address merge.
+        // For Chinese, we merge/extend address spans while keeping non-address
+        // entities (names, emails, etc.) as-is.
+        const spans = blk: {
+            switch (args.language) {
+                .zh, .zh_cn, .zh_tw, .zh_hk, .zh_hans, .zh_hant => {
+                    const addr_spans = try merge_zh.mergeZhAddressSpans(self.allocator, original_text, merged.items);
+                    defer self.allocator.free(addr_spans);
+
+                    var combined = try std.ArrayList(RecogEntity).initCapacity(self.allocator, merged.items.len + addr_spans.len);
+                    defer combined.deinit(self.allocator);
+
+                    // Keep all non-address/non-organization entities from original merged list.
+                    for (merged.items) |sp| {
+                        if (sp.entity_type == .PHYSICAL_ADDRESS) continue;
+                        try combined.append(self.allocator, sp);
+                    }
+                    // Add merged/extended address spans.
+                    try combined.appendSlice(self.allocator, addr_spans);
+
+                    break :blk try combined.toOwnedSlice(self.allocator);
+                },
+                else => break :blk try self.allocator.dupe(RecogEntity, merged.items),
+            }
         };
-        defer self.allocator.free(merged_address_spans);
+        defer self.allocator.free(spans);
 
         // 4) SpanMerger: sort, dedup by range, filter by score >= 0.5
-        const spans = merged_address_spans;
         std.log.debug("[mask] spans before sort/filter: {d}", .{spans.len});
         std.sort.block(RecogEntity, spans, {}, struct {
             fn lessThan(_: void, a: RecogEntity, b: RecogEntity) bool {
@@ -434,10 +534,12 @@ pub const MaskPipeline = struct {
         errdefer matched_pii_spans.deinit(self.allocator);
 
         var pos: usize = 0;
-        var idx: u32 = 0;
+        var idx: usize = 0;
+        var masked_serial: u32 = 0;
         while (idx < final_spans.len) : (idx += 1) {
-            const span_start = final_spans[idx].start;
-            const span_end = final_spans[idx].end;
+            const span = final_spans[idx];
+            const span_start = span.start;
+            const span_end = span.end;
             // Strict bounds/validity checks to avoid corrupt spans
             if (span_end > original_text.len or span_start >= span_end) {
                 std.log.warn("[mask] skip invalid span idx={d} start={d} end={d} len={d}", .{ idx, span_start, span_end, original_text.len });
@@ -445,16 +547,23 @@ pub const MaskPipeline = struct {
             }
             if (span_start > pos) try out_buf.appendSlice(self.allocator, original_text[pos..span_start]);
 
-            var ph_buf: [PLACEHOLDER_MAX_LEN]u8 = undefined;
-            const entity_id = idx + 1;
-            const ph_text = try writePlaceholder(ph_buf[0..], final_spans[idx].entity_type, entity_id);
-            try out_buf.appendSlice(self.allocator, ph_text);
-            try matched_pii_spans.append(self.allocator, .{
-                .entity_id = entity_id,
-                .entity_type = final_spans[idx].entity_type,
-                .matched_start = span_start,
-                .matched_end = span_end,
-            });
+            // Decide whether this entity type should be anonymized or kept as-is.
+            if (self.mask_config.isEnabled(span.entity_type)) {
+                var ph_buf: [PLACEHOLDER_MAX_LEN]u8 = undefined;
+                masked_serial += 1;
+                const entity_id = masked_serial;
+                const ph_text = try writePlaceholder(ph_buf[0..], span.entity_type, entity_id);
+                try out_buf.appendSlice(self.allocator, ph_text);
+                try matched_pii_spans.append(self.allocator, .{
+                    .entity_id = entity_id,
+                    .entity_type = span.entity_type,
+                    .matched_start = span_start,
+                    .matched_end = span_end,
+                });
+            } else {
+                // Masking disabled for this entity type; keep original text and do not record metadata.
+                try out_buf.appendSlice(self.allocator, original_text[span_start..span_end]);
+            }
             pos = span_end;
         }
         if (pos < original_text.len) try out_buf.appendSlice(self.allocator, original_text[pos..]);
@@ -616,6 +725,7 @@ fn writePlaceholder(buf: []u8, t: EntityType, serial: u32) ![]u8 {
 }
 
 pub const SessionInitArgs = extern struct {
+    mask_config: MaskConfig,
     ner_recog_type: NerRecogType,
 };
 
@@ -663,6 +773,7 @@ pub const Session = struct {
         };
         self.mask_pipeline = Pipeline.init(allocator, .{
             .mask = .{
+                .mask_config = init_args.mask_config,
                 .regex_list = regex_list,
                 .ner_recognizer = &self.ner_recognizer,
             },
@@ -746,7 +857,10 @@ test "session mask/restore with meta" {
     }
     const allocator = gpa.allocator();
 
-    const session = try Session.create(allocator, .{ .ner_recog_type = .token_classification });
+    const session = try Session.create(allocator, .{
+        .mask_config = MaskConfig{ .enable_mask_bits = ENABLE_MASK_ALL_BITS },
+        .ner_recog_type = .token_classification,
+    });
     defer session.destroy();
 
     const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
@@ -797,7 +911,10 @@ test "regex recognizer in mask/restore" {
     }
     const allocator = gpa.allocator();
 
-    const session = try Session.create(allocator, .{ .ner_recog_type = .token_classification });
+    const session = try Session.create(allocator, .{
+        .mask_config = MaskConfig{ .enable_mask_bits = ENABLE_MASK_ALL_BITS },
+        .ner_recog_type = .token_classification,
+    });
     defer session.destroy();
 
     const input = "use this temporary verification code: 9F4T2A. For the sandbox box, the pwd: S3cure!Passw0rd (I'll reset it after your tests, promise!).";
@@ -822,7 +939,10 @@ test "session restore_with_meta with empty masked text frees meta and returns nu
     }
     const allocator = gpa.allocator();
 
-    const session = try Session.create(allocator, .{ .ner_recog_type = .token_classification });
+    const session = try Session.create(allocator, .{
+        .mask_config = MaskConfig{ .enable_mask_bits = ENABLE_MASK_ALL_BITS },
+        .ner_recog_type = .token_classification,
+    });
     defer session.destroy();
 
     const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
@@ -851,7 +971,10 @@ test "session get PII spans" {
     }
     const allocator = gpa.allocator();
 
-    const session = try Session.create(allocator, .{ .ner_recog_type = .token_classification });
+    const session = try Session.create(allocator, .{
+        .mask_config = MaskConfig{ .enable_mask_bits = ENABLE_MASK_ALL_BITS },
+        .ner_recog_type = .token_classification,
+    });
     defer session.destroy();
 
     const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
@@ -918,6 +1041,11 @@ pub export fn aifw_shutdown() void {
     }
     RegexRecognizer.shutdownCache();
     globalAllocatorDeinit();
+}
+
+/// Return the default mask configuration bits used when no explicit mask config is provided.
+pub export fn aifw_default_mask_bits() u32 {
+    return MaskConfig.default_mask_bits;
 }
 
 pub export fn aifw_session_create(init_args: *const SessionInitArgs) *allowzero anyopaque {

@@ -18,11 +18,11 @@
 
 ### `init(options)`
 
-初始化 aifw-js 库，加载必要的 WASM 模块和 NER 模型。
+初始化 aifw-js 库，加载必要的 WASM 模块和 NER 模型，并创建匿名化会话。
 
 **参数：**
 
-- `options` (Object, 可选): 初始化配置，支持两种资源管理模式，并可分别对「模型」与「ORT 运行时」进行配置
+- `options` (Object, 可选): 初始化配置，支持两种资源管理模式，并可分别对「模型」与「ORT 运行时」进行配置，同时可以控制按实体类型是否执行匿名化
   - `mode` (String, 可选): 整体模式（默认应用到子项），可选 `'managed' | 'customize'`
   - `models` (Object, 可选): 模型资源设置
     - `mode` (String, 可选): `'managed' | 'customize'`
@@ -34,6 +34,20 @@
     - `wasmBase` (String, 可选): ORT wasm 目录（包含 `ort-wasm-simd*.wasm` 等文件）
     - `threads` (Number, 可选): 线程数（默认根据 `navigator.hardwareConcurrency` 决定）
     - `simd` (Boolean, 可选): 是否启用 SIMD（默认 `true`）
+  - `maskConfig` (Object, 可选): 按实体类型控制是否进行匿名化（占位符替换 + 写入元数据），所有字段均为可选布尔值：
+    - `maskAddress` (Boolean): 是否匿名化物理地址（PHYSICAL_ADDRESS）
+    - `maskEmail` (Boolean): 是否匿名化邮箱地址（EMAIL_ADDRESS）
+    - `maskOrganization` (Boolean): 是否匿名化组织/公司名（ORGANIZATION）
+    - `maskUserName` (Boolean): 是否匿名化人名/用户名（USER_MAME）
+    - `maskPhoneNumber` (Boolean): 是否匿名化电话号码（PHONE_NUMBER）
+    - `maskBankNumber` (Boolean): 是否匿名化银行卡号（BANK_NUMBER）
+    - `maskPayment` (Boolean): 是否匿名化支付相关信息（PAYMENT）
+    - `maskVerificationCode` (Boolean): 是否匿名化验证码（VERIFICATION_CODE）
+    - `maskPassword` (Boolean): 是否匿名化密码（PASSWORD）
+    - `maskRandomSeed` (Boolean): 是否匿名化随机种子（RANDOM_SEED）
+    - `maskPrivateKey` (Boolean): 是否匿名化私钥（PRIVATE_KEY）
+    - `maskUrl` (Boolean): 是否匿名化 URL（URL_ADDRESS）
+    - `maskAll` (Boolean): 是否匿名化所有的实体类型，全开或者全关
 
 兼容性（向后兼容）：
 - 仍支持旧参数：`wasmBase`（等价于 `ort.wasmBase` 的本地/自定义路径）、`modelsBase`（等价于 `models.modelsBase` 的本地/自定义路径）。
@@ -48,14 +62,14 @@
 ```javascript
 import { init } from './libaifw.js';
 
-// 1) default：全部交给库与上游托管（自动从外部下载）
+// 1) default：全部交给库与上游托管（自动从外部下载），使用核心默认的匿名化策略
 await init();
 
 // 2) local：本地调试，模型与 ORT wasm 均从本地路径加载
 await init({
   mode: 'local',
   models: { modelsBase: '/assets/models/' },    // 模型根目录
-  ort: { wasmBase: '/assets/wasm/' }         // ORT wasm 目录
+  ort: { wasmBase: '/assets/wasm/' }           // ORT wasm 目录
 });
 
 // 3) customize：完全自定义各资源路径（需要显式提供）
@@ -75,6 +89,15 @@ await init({
   models: { mode: 'customize', modelsBase: '/my-models' },
   ort: { mode: 'default' } // 不设路径则走上游默认
 });
+
+// 5) 控制按实体类型是否匿名化（例如：只匿名化邮箱和手机号，地址保留原文）
+await init({
+  maskConfig: {
+    maskAddress: false,
+    maskEmail: true,
+    maskPhoneNumber: true
+  }
+});
 ```
 
 **说明：**
@@ -85,6 +108,12 @@ await init({
   - 中文模型：`ckiplab/bert-tiny-chinese-ner`
 - 如果中文模型加载失败，会回退使用英文模型
 - 必须在使用其他功能之前调用此函数
+- 匿名化策略：
+  - 核心库内部有一套默认的按实体类型匿名化策略（例如默认不匿名化地址，其他类型全部匿名化）
+  - `maskConfig` 中的布尔开关会在默认策略的基础上进行「覆盖」：
+    - 传入 `true`：强制对该类型执行匿名化
+    - 传入 `false`：强制对该类型不执行匿名化（保留原文，不写入匿名化元数据）
+    - 未传：沿用核心默认策略
 
 托管模式（managed）行为：
 - 资源来源：从仓库的 `models/` 与 `wasm/` 子目录下载（参考仓库入口：[OneAIFW-Assets](https://github.com/funstory-ai/OneAIFW-Assets/tree/main)）。

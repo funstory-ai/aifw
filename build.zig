@@ -52,6 +52,7 @@ pub fn build(b: *std.Build) void {
         "aifw_malloc",
         "aifw_free_sized",
         "aifw_string_free",
+        "aifw_default_mask_bits",
         "aifw_shutdown",
         "aifw_session_create",
         "aifw_session_destroy",

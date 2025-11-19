@@ -10,7 +10,10 @@ pub fn main() !void {
 }
 
 fn test_session_mask_and_restore_with_meta() !void {
-    const session = core.aifw_session_create(&.{ .ner_recog_type = .token_classification });
+    const session = core.aifw_session_create(&.{
+        .mask_config = core.MaskConfig.getEnableAllMaskConfig(),
+        .ner_recog_type = .token_classification,
+    });
     if (@intFromPtr(session) == 0) {
         std.log.err("failed to create session\n", .{});
         return error.TestFailed;

@@ -428,6 +428,59 @@ async function pickFastestAssetsBase() {
   }
 }
 
+function getMaskBitsFromMaskConfig(maskCfg) {
+  // Bit constants must stay in sync with core/aifw_core.zig ENABLE_MASK_*_BIT definitions.
+  const ENABLE_MASK_ADDR_BIT = 1 << 0;
+  const ENABLE_MASK_EMAIL_BIT = 1 << 1;
+  const ENABLE_MASK_ORG_BIT = 1 << 2;
+  const ENABLE_MASK_USER_NAME_BIT = 1 << 3;
+  const ENABLE_MASK_PHONE_NUMBER_BIT = 1 << 4;
+  const ENABLE_MASK_BANK_NUMBER_BIT = 1 << 5;
+  const ENABLE_MASK_PAYMENT_BIT = 1 << 6;
+  const ENABLE_MASK_VCODE_BIT = 1 << 7;
+  const ENABLE_MASK_PASSWORD_BIT = 1 << 8;
+  const ENABLE_MASK_RANDOM_SEED_BIT = 1 << 9;
+  const ENABLE_MASK_PRIVATE_KEY_BIT = 1 << 10;
+  const ENABLE_MASK_URL_ADDRESS_BIT = 1 << 11;
+  const ENABLE_MASK_ALL_BITS =
+    ENABLE_MASK_ADDR_BIT |
+    ENABLE_MASK_EMAIL_BIT |
+    ENABLE_MASK_ORG_BIT |
+    ENABLE_MASK_USER_NAME_BIT |
+    ENABLE_MASK_PHONE_NUMBER_BIT |
+    ENABLE_MASK_BANK_NUMBER_BIT |
+    ENABLE_MASK_PAYMENT_BIT |
+    ENABLE_MASK_VCODE_BIT |
+    ENABLE_MASK_PASSWORD_BIT |
+    ENABLE_MASK_RANDOM_SEED_BIT |
+    ENABLE_MASK_PRIVATE_KEY_BIT |
+    ENABLE_MASK_URL_ADDRESS_BIT;
+
+  // Fetch default mask bits from core and then apply JS-side overrides.
+  let maskBits = 0 >>> 0;
+  if (typeof wasm.aifw_default_mask_bits === 'function') {
+    maskBits = wasm.aifw_default_mask_bits() >>> 0;
+  }
+  function applyMaskFlag(flagValue, bit) {
+    if (flagValue === true) maskBits |= bit;
+    else if (flagValue === false) maskBits &= ~bit;
+  }
+  applyMaskFlag(maskCfg.maskAddress, ENABLE_MASK_ADDR_BIT);
+  applyMaskFlag(maskCfg.maskEmail, ENABLE_MASK_EMAIL_BIT);
+  applyMaskFlag(maskCfg.maskOrganization, ENABLE_MASK_ORG_BIT);
+  applyMaskFlag(maskCfg.maskUserName, ENABLE_MASK_USER_NAME_BIT);
+  applyMaskFlag(maskCfg.maskPhoneNumber, ENABLE_MASK_PHONE_NUMBER_BIT);
+  applyMaskFlag(maskCfg.maskBankNumber, ENABLE_MASK_BANK_NUMBER_BIT);
+  applyMaskFlag(maskCfg.maskPayment, ENABLE_MASK_PAYMENT_BIT);
+  applyMaskFlag(maskCfg.maskVerificationCode, ENABLE_MASK_VCODE_BIT);
+  applyMaskFlag(maskCfg.maskPassword, ENABLE_MASK_PASSWORD_BIT);
+  applyMaskFlag(maskCfg.maskRandomSeed, ENABLE_MASK_RANDOM_SEED_BIT);
+  applyMaskFlag(maskCfg.maskPrivateKey, ENABLE_MASK_PRIVATE_KEY_BIT);
+  applyMaskFlag(maskCfg.maskUrl, ENABLE_MASK_URL_ADDRESS_BIT);
+  applyMaskFlag(maskCfg.maskAll, ENABLE_MASK_ALL_BITS);
+  return maskBits >>> 0;
+}
+
 export async function init(options = {}) {
   // Backward compatibility: map legacy options to new structure
   // Legacy: { wasmBase, modelsBase }
@@ -513,6 +566,8 @@ export async function init(options = {}) {
 
   // Load aifw core wasm library (separate from ORT wasm)
   wasm = await loadAifwCore();
+  const maskCfg = options.maskConfig || {};
+  const maskBits = getMaskBitsFromMaskConfig(maskCfg);
   // load NER lib and pipeline (relative import for packaged lib)
   nerLib = await import('./libner.js');
 
@@ -540,7 +595,7 @@ export async function init(options = {}) {
     console.warn('load zh NER model failed, using en model instead.');
   }
 
-  session = await createSession();
+  session = await createSession(maskBits);
 }
 
 export async function deinit() {
@@ -553,21 +608,29 @@ export async function deinit() {
   wasm = null;
 }
 
-async function createSession() {
+async function createSession(maskBits) {
   if (!wasm) throw new Error('AIFW not initialized');
-  // default ner_recog_type = token_classification (0)
-  const initBuf = new Uint8Array(4);
-  const initAlloc = wasm.aifw_malloc(initBuf.length);
-  new Uint8Array(wasm.memory.buffer, initAlloc, initBuf.length).set(initBuf);
-  new DataView(wasm.memory.buffer).setUint32(initAlloc + 0, 0, true);
+  // SessionInitArgs layout (extern struct):
+  // - u32 enable_mask_bits
+  // - u8  ner_recog_type (0 = token_classification)
+  const initSize = 8;
+  const initBuf = new Uint8Array(initSize);
+  const initArg = wasm.aifw_malloc(initBuf.length);
+  if (!initArg) throw new Error('aifw_malloc failed for SessionInitArgs');
+  const mem = new Uint8Array(wasm.memory.buffer, initArg, initBuf.length);
+  mem.set(initBuf);
+  const dv = new DataView(wasm.memory.buffer);
+  dv.setUint32(initArg + 0, (maskBits >>> 0), true);
+  // ner_recog_type = 0 (token_classification)
+  dv.setUint8(initArg + 4, 0);
 
   let session = {};
   try {
-    session.handle = wasm.aifw_session_create(initAlloc);
+    session.handle = wasm.aifw_session_create(initArg);
     if (!session.handle) throw new Error('session_create failed');
   } finally {
     // init buffer can be freed immediately after creation
-    freeBuf(initAlloc, initBuf.length);
+    freeBuf(initArg, initBuf.length);
   }
   return session;
 }
