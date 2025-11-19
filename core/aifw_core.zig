@@ -484,22 +484,8 @@ fn dedupOverlappingSpans(allocator: std.mem.Allocator, spans: []const RecogEntit
     errdefer allocator.free(dup_spans);
     const Ctx = struct { text: []const u8 };
     std.sort.block(RecogEntity, dup_spans, Ctx{ .text = text }, struct {
-        fn hasHouse(t: []const u8, s: RecogEntity) bool {
-            return if (s.entity_type == .PHYSICAL_ADDRESS) merge_zh.hasHouseTailInside(t, s.start, s.end) else false;
-        }
         fn lessThan(ctx: Ctx, a: RecogEntity, b: RecogEntity) bool {
-            // Conflict resolution (PHYSICAL_ADDRESS): deeper -> longer -> earlier -> higher score
-            if (a.entity_type == .PHYSICAL_ADDRESS or b.entity_type == .PHYSICAL_ADDRESS) {
-                const da = if (a.entity_type == .PHYSICAL_ADDRESS) merge_zh.quickDepthRank(ctx.text, a.start, a.end) else 255;
-                const db = if (b.entity_type == .PHYSICAL_ADDRESS) merge_zh.quickDepthRank(ctx.text, b.start, b.end) else 255;
-                if (da != db) return da < db; // smaller rank is deeper
-                const a_len = a.end - a.start;
-                const b_len = b.end - b.start;
-                if (a_len != b_len) return a_len > b_len;
-                if (a.start != b.start) return a.start < b.start;
-                if (a.score != b.score) return a.score > b.score;
-                return a.start < b.start;
-            }
+            _ = ctx;
             // Default: higher score, then longer length, then earlier start
             if (a.score != b.score) return a.score > b.score; // higher first
             const a_len = a.end - a.start;
