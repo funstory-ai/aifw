@@ -312,16 +312,14 @@ pub const MaskConfig = extern struct {
         return .{ .enable_mask_bits = 0 };
     }
 
-    pub fn enableMaskEntityType(self: *MaskConfig, entity_type: EntityType) MaskConfig {
+    pub fn enableMaskEntityType(self: MaskConfig, entity_type: EntityType) MaskConfig {
         const bit: u32 = bitFromEntityType(entity_type);
-        self.enable_mask_bits |= bit;
-        return self;
+        return .{ .enable_mask_bits = self.enable_mask_bits | bit };
     }
 
-    pub fn disableMaskEntityType(self: *MaskConfig, entity_type: EntityType) MaskConfig {
+    pub fn disableMaskEntityType(self: MaskConfig, entity_type: EntityType) MaskConfig {
         const bit: u32 = bitFromEntityType(entity_type);
-        self.enable_mask_bits &= ~bit;
-        return self;
+        return .{ .enable_mask_bits = self.enable_mask_bits & ~bit };
     }
 
     /// Return whether the given entity type should be anonymized according to enable_mask_bits.
