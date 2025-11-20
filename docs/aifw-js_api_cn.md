@@ -35,19 +35,19 @@
     - `threads` (Number, 可选): 线程数（默认根据 `navigator.hardwareConcurrency` 决定）
     - `simd` (Boolean, 可选): 是否启用 SIMD（默认 `true`）
   - `maskConfig` (Object, 可选): 按实体类型控制是否进行匿名化（占位符替换 + 写入元数据），所有字段均为可选布尔值：
-    - `maskAddress` (Boolean): 是否匿名化物理地址（PHYSICAL_ADDRESS）
-    - `maskEmail` (Boolean): 是否匿名化邮箱地址（EMAIL_ADDRESS）
-    - `maskOrganization` (Boolean): 是否匿名化组织/公司名（ORGANIZATION）
-    - `maskUserName` (Boolean): 是否匿名化人名/用户名（USER_MAME）
-    - `maskPhoneNumber` (Boolean): 是否匿名化电话号码（PHONE_NUMBER）
-    - `maskBankNumber` (Boolean): 是否匿名化银行卡号（BANK_NUMBER）
-    - `maskPayment` (Boolean): 是否匿名化支付相关信息（PAYMENT）
-    - `maskVerificationCode` (Boolean): 是否匿名化验证码（VERIFICATION_CODE）
-    - `maskPassword` (Boolean): 是否匿名化密码（PASSWORD）
-    - `maskRandomSeed` (Boolean): 是否匿名化随机种子（RANDOM_SEED）
-    - `maskPrivateKey` (Boolean): 是否匿名化私钥（PRIVATE_KEY）
-    - `maskUrl` (Boolean): 是否匿名化 URL（URL_ADDRESS）
-    - `maskAll` (Boolean): 是否匿名化所有的实体类型，全开或者全关
+    - `maskAddress` (Boolean): 是否匿名化物理地址（PHYSICAL_ADDRESS），缺省值是false。
+    - `maskEmail` (Boolean): 是否匿名化邮箱地址（EMAIL_ADDRESS），缺省值是true。
+    - `maskOrganization` (Boolean): 是否匿名化组织/公司名（ORGANIZATION），缺省值是true。
+    - `maskUserName` (Boolean): 是否匿名化人名/用户名（USER_MAME），缺省值是true。
+    - `maskPhoneNumber` (Boolean): 是否匿名化电话号码（PHONE_NUMBER），缺省值是true。
+    - `maskBankNumber` (Boolean): 是否匿名化银行卡号（BANK_NUMBER），缺省值是true。
+    - `maskPayment` (Boolean): 是否匿名化支付相关信息（PAYMENT），缺省值是true。
+    - `maskVerificationCode` (Boolean): 是否匿名化验证码（VERIFICATION_CODE），缺省值是true。
+    - `maskPassword` (Boolean): 是否匿名化密码（PASSWORD），缺省值是true。
+    - `maskRandomSeed` (Boolean): 是否匿名化随机种子（RANDOM_SEED），缺省值是true。
+    - `maskPrivateKey` (Boolean): 是否匿名化私钥（PRIVATE_KEY），缺省值是true。
+    - `maskUrl` (Boolean): 是否匿名化 URL（URL_ADDRESS），缺省值是true。
+    - `maskAll` (Boolean): 是否匿名化所有的实体类型，全开或者全关，覆盖上面所有设置，无缺省值。
 
 兼容性（向后兼容）：
 - 仍支持旧参数：`wasmBase`（等价于 `ort.wasmBase` 的本地/自定义路径）、`modelsBase`（等价于 `models.modelsBase` 的本地/自定义路径）。
