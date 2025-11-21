@@ -15,11 +15,11 @@ pub fn build(b: *std.Build) void {
     //     .optimize = optimize,
     // });
 
-    // Native static library
+    // Native dynamic library
     const lib = b.addLibrary(.{
         .name = "oneaifw_core",
         .root_module = aifw_core_native,
-        .linkage = .static,
+        .linkage = .dynamic,
     });
     lib.root_module.strip = optimize != .Debug;
     // Link C runtime for native (Rust staticlib references libc symbols like strlen)

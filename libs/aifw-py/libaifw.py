@@ -12,30 +12,33 @@ This module mirrors aifw-js/libaifw.js in surface API:
 - get_pii_spans(text, language) -> List[MatchedPIISpan]
 
 Implementation notes:
-- Uses Presidio-based analyzer/anonymizer from py-origin for NER and masking.
-- mask_meta is a UTF-8 JSON-serialized object for reversible restore:
-  { "placeholdersMap": { "__PII_...__": "original" }, "language": "en" }
+- Uses Python transformers for NER token classification.
+- Uses wasmtime to load and call Zig core WASM (same as js lib flows).
 """
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from .libner import init_env as ner_init_env, build_ner_pipeline
-from ...py-origin.services.app.analyzer import AnalyzerWrapper
-from ...py-origin.services.app.anonymizer import AnonymizerWrapper
+from langdetect import detect as langdetect_detect
+import os
+import sys
+import struct
+import ctypes
+from ctypes import c_void_p, c_uint8, c_uint16, c_uint32, c_size_t, c_char_p, POINTER, byref
+from typing import Union
 
 logger = logging.getLogger(__name__)
 
 
 # Global state
-_ANALYZER: Optional[AnalyzerWrapper] = None
-_ANON: Optional[AnonymizerWrapper] = None
 _NER_EN = None
 _NER_ZH = None
 _SESSION_OPEN = False
+_CORE = None  # ctypes.CDLL
+_SESSION_HANDLE = c_void_p(0)
 
 
 # Language/script detection helpers (heuristics + optional OpenCC)
@@ -134,14 +137,19 @@ def _decide_script_with_opencc(text: str) -> str:
 
 
 async def detect_language(text: str) -> Dict[str, Any]:
-    lang = _quick_lang(text or "")
-    if lang != "zh":
-        return {"lang": lang, "script": None, "confidence": 0.9 if lang == "en" else 0.6, "method": "heuristic"}
+    # Use langdetect for primary language detection
+    try:
+        code = langdetect_detect(text or "")
+    except Exception:
+        code = "en"
+    lang = "zh" if code.startswith("zh") else (code or "en")
+    if not lang.startswith("zh"):
+        return {"lang": lang, "script": None, "confidence": 0.9 if lang == "en" else 0.6, "method": "langdetect"}
     script_quick = _quick_script_zh(text or "")
     if script_quick:
-        return {"lang": "zh", "script": script_quick, "confidence": 0.8, "method": "heuristic"}
+        return {"lang": "zh", "script": script_quick, "confidence": 0.8, "method": "heuristic+langdetect"}
     script = _decide_script_with_opencc(text or "")
-    return {"lang": "zh", "script": script, "confidence": 0.95, "method": "opencc"}
+    return {"lang": "zh", "script": script, "confidence": 0.95, "method": "opencc+langdetect"}
 
 
 def init(options: Optional[Dict[str, Any]] = None) -> None:
@@ -149,44 +157,43 @@ def init(options: Optional[Dict[str, Any]] = None) -> None:
     Initialize aifw-py runtime.
     options are accepted for API parity; unknown keys are ignored.
     """
-    global _ANALYZER, _ANON, _NER_EN, _NER_ZH, _SESSION_OPEN
+    global _NER_EN, _NER_ZH, _SESSION_OPEN, _WASM, _SESSION_HANDLE
     if _SESSION_OPEN:
         return
     options = options or {}
-    # Initialize analyzer/anonymizer
-    _ANALYZER = AnalyzerWrapper()
-    _ANON = AnonymizerWrapper(_ANALYZER)
-    # Initialize ner env and two pipelines (best-effort)
+    # Initialize ner env and two pipelines
+    models_base = None
+    if isinstance(options.get("models"), dict):
+        models_base = options["models"].get("modelsBase")
+    if not models_base:
+        models_base = os.environ.get("AIFW_MODELS_BASE")
     ner_init_env({
-        "wasmBase": (options.get("ort") or {}).get("wasmBase"),
-        "modelsBase": (options.get("models") or {}).get("modelsBase"),
-        "threads": (options.get("ort") or {}).get("threads"),
-        "simd": (options.get("ort") or {}).get("simd"),
-        "customCache": (options.get("models") or {}).get("customCache"),
+        "modelsBase": models_base,
     })
-    # Model ids aligned with js defaults
-    try:
-        # Lazy async creation via event loop would complicate; call synchronously via simple wrappers
-        import asyncio
-        _NER_EN = asyncio.get_event_loop().run_until_complete(
-            build_ner_pipeline("funstory-ai/neurobert-mini", {"quantized": True})
-        )
-        _NER_ZH = asyncio.get_event_loop().run_until_complete(
-            build_ner_pipeline("ckiplab/bert-tiny-chinese-ner", {"quantized": True})
-        )
-    except Exception as e:
-        logger.warning("Failed to prebuild NER pipelines: %s", e)
-        _NER_EN = None
-        _NER_ZH = None
+    _NER_EN = _sync_await(build_ner_pipeline("funstory-ai/neurobert-mini", {"quantized": True}))
+    _NER_ZH = _sync_await(build_ner_pipeline("ckiplab/bert-tiny-chinese-ner", {"quantized": True}))
+    # Load native core via ctypes
+    _load_core_native(options or {})
+    # Create session
+    mask_bits = _get_mask_bits_from_mask_config(options.get("maskConfig") or {})
+    _SESSION_HANDLE = _create_session(mask_bits)
     _SESSION_OPEN = True
     logger.info("[aifw-py] init complete.")
 
 
 def deinit() -> None:
     """Tear down runtime."""
-    global _ANALYZER, _ANON, _NER_EN, _NER_ZH, _SESSION_OPEN
-    _ANALYZER = None
-    _ANON = None
+    global _NER_EN, _NER_ZH, _SESSION_OPEN, _CORE, _SESSION_HANDLE
+    try:
+        _destroy_session()
+    except Exception:
+        pass
+    try:
+        if _CORE:
+            _CORE.aifw_shutdown()
+    except Exception:
+        pass
+    _SESSION_HANDLE = c_void_p(0)
     _NER_EN = None
     _NER_ZH = None
     _SESSION_OPEN = False
@@ -195,14 +202,14 @@ def deinit() -> None:
 def _select_language(input_text: str, language: Optional[str]) -> str:
     lang_to_use = language or ""
     if not lang_to_use or lang_to_use.lower() == "auto":
-        # Use heuristic detector to pick major language bucket
-        # Avoid async here for simplicity
-        det = _quick_lang(input_text or "")
-        if det == "zh":
-            # Default to simplified for masking path unless strong Hant signal
+        try:
+            code = langdetect_detect(input_text or "")
+        except Exception:
+            code = "en"
+        if code.startswith("zh"):
             script = _quick_script_zh(input_text or "") or "Hans"
             return "zh-TW" if script == "Hant" else "zh-CN"
-        return det or "en"
+        return code or "en"
     return lang_to_use
 
 
@@ -246,43 +253,106 @@ class MatchedPIISpan:
     matched_end: int
 
 
+def _session_handle_is_valid() -> bool:
+    """
+    Return True if session handle points to a valid core Session.
+    Handles both ctypes.c_void_p and raw int usages.
+    """
+    try:
+        h = _SESSION_HANDLE
+        if h is None:
+            return False
+        # ctypes.c_void_p has .value; some environments may hold raw int
+        if isinstance(h, ctypes.c_void_p):
+            return bool(h.value)
+        return int(h) != 0
+    except Exception:
+        return False
+
+
 def _ensure_ready():
-    if not _SESSION_OPEN or _ANALYZER is None or _ANON is None:
+    if (not _SESSION_OPEN) or (not _CORE) or (not _session_handle_is_valid()):
+        # Log detailed state to help debugging initialization issues
+        hv = None
+        try:
+            hv = getattr(_SESSION_HANDLE, "value", None)
+        except Exception:
+            hv = None
+        logger.error(
+            "AIFW not initialized; SESSION_OPEN=%s CORE=%s SESSION_HANDLE=%s HANDLE_VALUE=%s",
+            _SESSION_OPEN, _CORE, _SESSION_HANDLE, hv
+        )
         raise RuntimeError("AIFW not initialized; call init() first")
 
 
 def mask_text(input_text: str, language: Optional[str] = None) -> Tuple[str, bytes]:
     """
-    Mask text and return tuple of (masked_text, mask_meta_bytes).
-    mask_meta is JSON-serialized and consumable by restore_text.
+    Mirror js: build ner entities, call core wasm mask_and_out_meta, copy meta bytes and free core buffer.
     """
     _ensure_ready()
     lang_to_use = _select_language(input_text, language)
-    result = _ANON.anonymize(text=str(input_text or ""), operators=None, language=lang_to_use.split("-")[0])
-    masked = result.get("text", "")
-    placeholders_map = result.get("placeholdersMap", {}) or {}
-    meta = {"placeholdersMap": placeholders_map, "language": lang_to_use}
-    meta_bytes = json.dumps(meta, ensure_ascii=False).encode("utf-8")
-    return masked, meta_bytes
+    ner_pipe = _select_ner(lang_to_use)
+    # zh simplified case: convert to traditional for zh model to improve recognition; map offsets back
+    run_text = input_text
+    run_opts = {}
+    if ner_pipe is _NER_ZH and _is_zh_simplified(lang_to_use):
+        try:
+            from opencc import OpenCC
+            s2t = OpenCC("s2t")
+            t2s = OpenCC("t2s")
+            run_text = s2t.convert(input_text)
+            run_opts = {"offsetText": input_text, "tokenTransform": (lambda s: t2s.convert(s))}
+        except Exception:
+            pass
+    items = _sync_await(ner_pipe.run(run_text, run_opts))
+    ner_buf = _build_ner_entities_buffer(items, input_text)
+    try:
+        # Prepare inputs
+        in_c = ctypes.create_string_buffer((input_text or "").encode("utf-8") + b"\x00")
+        out_masked = c_void_p()
+        out_meta = c_void_p()
+        lang_enum = _language_enum(lang_to_use)
+        rc = _CORE.aifw_session_mask_and_out_meta(
+            _SESSION_HANDLE,
+            ctypes.cast(in_c, c_char_p),
+            ctypes.cast(ner_buf["ptr"], c_void_p),
+            c_uint32(ner_buf["count"]),
+            c_uint8(lang_enum),
+            byref(out_masked),
+            byref(out_meta),
+        )
+        if rc != 0:
+            raise RuntimeError(f"mask failed rc={rc}")
+        masked_text = ctypes.string_at(out_masked).decode("utf-8", errors="ignore")
+        _CORE.aifw_string_free(out_masked)
+        # mask meta: read length u32 then bytes
+        total_len = struct.unpack("<I", ctypes.string_at(out_meta, 4))[0]
+        meta_bytes = ctypes.string_at(out_meta, total_len)
+        _CORE.aifw_free_sized(out_meta, c_size_t(total_len))
+        return masked_text, meta_bytes
+    finally:
+        # ner_buf created in Python memory; no core free needed
+        pass
 
 
 def restore_text(masked_text: str, mask_meta: Union[bytes, bytearray, memoryview, Dict[str, Any]]) -> str:
     """
-    Restore text using mask_meta produced by mask_text.
-    mask_meta can be bytes (JSON) or pre-parsed dict.
+    Restore text: upload serialized meta bytes to wasm memory; core frees it.
     """
     _ensure_ready()
-    if isinstance(mask_meta, (bytes, bytearray, memoryview)):
-        try:
-            meta_obj = json.loads(bytes(mask_meta).decode("utf-8"))
-        except Exception as e:
-            raise ValueError(f"invalid mask_meta bytes: {e}")
-    elif isinstance(mask_meta, dict):
-        meta_obj = mask_meta
-    else:
-        raise ValueError("mask_meta must be bytes-like or dict")
-    placeholders_map = meta_obj.get("placeholdersMap", {}) or {}
-    return _ANON.restore(text=str(masked_text or ""), placeholders_map=placeholders_map)
+    meta_bytes = bytes(mask_meta)
+    in_masked = ctypes.create_string_buffer((masked_text or "").encode("utf-8") + b"\x00")
+    meta_ptr = _CORE.aifw_malloc(c_size_t(len(meta_bytes)))
+    ctypes.memmove(meta_ptr, meta_bytes, len(meta_bytes))
+    out_restored = c_void_p()
+    rc = _CORE.aifw_session_restore_with_meta(_SESSION_HANDLE, ctypes.cast(in_masked, c_char_p), meta_ptr, byref(out_restored))
+    if rc != 0:
+        raise RuntimeError(f"restore failed rc={rc}")
+    if int(out_restored.value or 0) == 0:
+        return ""
+    restored = ctypes.string_at(out_restored).decode("utf-8", errors="ignore")
+    _CORE.aifw_string_free(out_restored)
+    return restored
 
 
 def mask_text_batch(text_and_language_array: List[Union[str, Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -319,21 +389,349 @@ def restore_text_batch(text_and_mask_meta_array: List[Dict[str, Any]]) -> List[D
 
 def get_pii_spans(input_text: str, language: Optional[str] = None) -> List[MatchedPIISpan]:
     """
-    Return spans compatible with MatchedPIISpan from js.
+    Return spans compatible with MatchedPIISpan from js by calling core get_pii_spans.
     """
     _ensure_ready()
     lang_to_use = _select_language(input_text, language)
-    spans = _ANALYZER.analyze(text=str(input_text or ""), language=lang_to_use.split("-")[0])
-    out: List[MatchedPIISpan] = []
-    for idx, s in enumerate(spans, start=1):
-        out.append(
-            MatchedPIISpan(
-                entity_id=idx,
-                entity_type=_entity_type_str_to_code(getattr(s, "entity_type", "")),
-                matched_start=int(getattr(s, "start", 0)),
-                matched_end=int(getattr(s, "end", 0)),
-            )
+    ner_pipe = _select_ner(lang_to_use)
+    run_text = input_text
+    run_opts = {}
+    if ner_pipe is _NER_ZH and _is_zh_simplified(lang_to_use):
+        try:
+            from opencc import OpenCC
+            s2t = OpenCC("s2t")
+            t2s = OpenCC("t2s")
+            run_text = s2t.convert(input_text)
+            run_opts = {"offsetText": input_text, "tokenTransform": (lambda s: t2s.convert(s))}
+        except Exception:
+            pass
+    items = _sync_await(ner_pipe.run(run_text, run_opts))
+    ner_buf = _build_ner_entities_buffer(items, input_text)
+    try:
+        in_c = ctypes.create_string_buffer((input_text or "").encode("utf-8") + b"\x00")
+        out_spans = c_void_p()
+        out_count = c_uint32(0)
+        lang_enum = _language_enum_for_spans(lang_to_use)
+        rc = _CORE.aifw_session_get_pii_spans(
+            _SESSION_HANDLE,
+            ctypes.cast(in_c, c_char_p),
+            ctypes.cast(ner_buf["ptr"], c_void_p),
+            c_uint32(ner_buf["count"]),
+            c_uint8(lang_enum),
+            byref(out_spans),
+            byref(out_count),
         )
-    return out
+        if rc != 0:
+            raise RuntimeError(f"get_pii_spans failed rc={rc}")
+        span_size = 16
+        raw = ctypes.string_at(out_spans, out_count.value * span_size)
+        out: List[MatchedPIISpan] = []
+        for i in range(out_count.value):
+            base = i * span_size
+            entity_id = int(struct.unpack_from("<I", raw, base + 0)[0])
+            entity_type = int(struct.unpack_from("<B", raw, base + 4)[0])
+            matched_start = int(struct.unpack_from("<I", raw, base + 8)[0])
+            matched_end = int(struct.unpack_from("<I", raw, base + 12)[0])
+            out.append(MatchedPIISpan(entity_id, entity_type, matched_start, matched_end))
+        if int(out_spans.value or 0) and out_count.value:
+            _CORE.aifw_free_sized(out_spans, c_size_t(out_count.value * span_size))
+        return out
+    finally:
+        pass
 
 
+# ---- Internal helpers mirroring js ----
+def _select_ner(language: str):
+    l = (language or "").lower()
+    if l == "zh" or l.startswith("zh-"):
+        return _NER_ZH or _NER_EN
+    return _NER_EN
+
+
+def _is_zh_simplified(language: str) -> bool:
+    l = (language or "").lower()
+    if l == "zh":
+        return True
+    if l == "zh-cn" or l == "zh-hans":
+        return True
+    if not l.startswith("zh-"):
+        return False
+    if "hant" in l or "tw" in l or "hk" in l:
+        return False
+    return True
+
+
+def _language_enum(language: str) -> int:
+    l = (language or "").lower()
+    if l.startswith("en"):
+        return 1
+    if l.startswith("ja"):
+        return 2
+    if l.startswith("ko"):
+        return 3
+    if l == "zh":
+        return 4
+    if l == "zh-cn":
+        return 5
+    if l == "zh-tw":
+        return 6
+    if l == "zh-hk":
+        return 7
+    if l == "zh-hans":
+        return 8
+    if l == "zh-hant":
+        return 9
+    if l.startswith("fr"):
+        return 10
+    if l.startswith("de"):
+        return 11
+    if l.startswith("ru"):
+        return 12
+    if l.startswith("es"):
+        return 13
+    if l.startswith("it"):
+        return 14
+    if l.startswith("ar"):
+        return 15
+    if l.startswith("pt"):
+        return 16
+    return 0
+
+
+def _language_enum_for_spans(language: str) -> int:
+    l = (language or "").lower()
+    if l.startswith("zh"):
+        return 1
+    if l.startswith("en"):
+        return 2
+    return 0
+
+
+def _to_core_and_tag(label: str) -> Tuple[str, int]:
+    s = str(label or "")
+    if s.startswith("B-") or s.startswith("S-"):
+        return s[2:], 1
+    if s.startswith("I-") or s.startswith("E-"):
+        return s[2:], 2
+    if s:
+        return s, 0
+    return "MISC", 0
+
+
+def _to_entity_type(core: str) -> int:
+    c = core.upper()
+    if c in ("PER", "PERSON"):
+        return 4
+    if c == "ORG":
+        return 3
+    if c in ("LOC", "GPE", "FAC", "ADDRESS"):
+        return 1
+    if c == "MISC":
+        return 0
+    return 0
+
+
+def _build_ner_entities_buffer(items: List[Dict[str, Any]] or List[Any], js_text: str) -> Dict[str, Any]:
+    if not items:
+        return {"ptr": c_void_p(0), "count": 0, "owned": [], "byteSize": 0, "keep": None}
+    struct_size = 20
+    count = len(items)
+    total = struct_size * count
+    ba = bytearray(total)
+    cbuf = (ctypes.c_char * total).from_buffer(ba)
+
+    def compute_utf8_offset_map(text: str) -> List[int]:
+        mapping: List[int] = [0] * (len(text) + 1)
+        bpos = 0
+        i = 0
+        while i < len(text):
+            mapping[i] = bpos
+            cp = ord(text[i])
+            cu_len = 2 if cp > 0xFFFF else 1
+            if cp <= 0x7F:
+                utf8_len = 1
+            elif cp <= 0x7FF:
+                utf8_len = 2
+            elif cp <= 0xFFFF:
+                utf8_len = 3
+            else:
+                utf8_len = 4
+            bpos += utf8_len
+            i += cu_len
+        mapping[len(text)] = bpos
+        return mapping
+
+    utf8_map = compute_utf8_offset_map(js_text)
+    text_len = len(js_text)
+
+    for i, it in enumerate(items):
+        s = max(0, min(text_len, int(getattr(it, "start", getattr(it, "start", 0)))))
+        e = max(s, min(text_len, int(getattr(it, "end", getattr(it, "end", 0)))))
+        s_byte = utf8_map[s] if s < len(utf8_map) else 0
+        e_byte = utf8_map[e] if e < len(utf8_map) else utf8_map[text_len]
+        entity_raw = getattr(it, "entity", getattr(it, "entity", ""))
+        core, tag_val = _to_core_and_tag(entity_raw)
+        entity_type_val = _to_entity_type(core)
+        # pack struct: <BBH f I I I
+        struct.pack_into("<BBHfIII", ba, i * struct_size,
+                         int(entity_type_val) & 0xFF,
+                         int(tag_val) & 0xFF,
+                         0,
+                         float(getattr(it, "score", 0.0)),
+                         int(getattr(it, "index", 0)),
+                         int(s_byte),
+                         int(e_byte))
+    return {
+        "ptr": ctypes.cast(ctypes.addressof(cbuf), c_void_p),
+        "count": count,
+        "owned": [],
+        "byteSize": total,
+        "keep": (ba, cbuf),
+    }
+
+def _sync_await(coro):
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            new_loop = asyncio.new_event_loop()
+            try:
+                return new_loop.run_until_complete(coro)
+            finally:
+                new_loop.close()
+        else:
+            return loop.run_until_complete(coro)
+    except RuntimeError:
+        new_loop = asyncio.new_event_loop()
+        try:
+            return new_loop.run_until_complete(coro)
+        finally:
+            new_loop.close()
+
+
+# ---- Native core wiring via ctypes ----
+def _load_core_native(options: Dict[str, Any]) -> None:
+    global _CORE
+    # Project root = <repo>/ (this file is at libs/aifw-py/libaifw.py)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    lib_dir = os.path.join(project_root, "zig-out", "lib")
+    # Allow override by env var
+    override = os.environ.get("AIFW_CORE_LIB")
+    if override and os.path.exists(override):
+        lib_path = override
+    else:
+        # Platform-specific names
+        if sys.platform == "darwin":
+            cand = os.path.join(lib_dir, "liboneaifw_core.dylib")
+        elif sys.platform.startswith("linux"):
+            cand = os.path.join(lib_dir, "liboneaifw_core.so")
+        elif os.name == "nt":
+            cand = os.path.join(lib_dir, "oneaifw_core.dll")
+        else:
+            cand = os.path.join(lib_dir, "liboneaifw_core.dylib")
+        lib_path = cand
+    if not os.path.exists(lib_path):
+        raise RuntimeError(
+            "Native core library not found.\n"
+            f"Expected at: {lib_path}\n"
+            "Please build a shared library (not .a) and/or set env AIFW_CORE_LIB to the built file.\n"
+            "Example (macOS): zig build -Dshared=true  -> zig-out/lib/liboneaifw_core.dylib"
+        )
+    _CORE = ctypes.CDLL(lib_path)
+    _bind_core_signatures()
+
+
+def _bind_core_signatures() -> None:
+    # Basic
+    _CORE.aifw_shutdown.restype = None
+    _CORE.aifw_default_mask_bits.restype = c_uint32
+    _CORE.aifw_malloc.argtypes = [c_size_t]
+    _CORE.aifw_malloc.restype = c_void_p
+    _CORE.aifw_free_sized.argtypes = [c_void_p, c_size_t]
+    _CORE.aifw_free_sized.restype = None
+    _CORE.aifw_string_free.argtypes = [c_void_p]
+    _CORE.aifw_string_free.restype = None
+    # Session
+    _CORE.aifw_session_create.argtypes = [c_void_p]
+    _CORE.aifw_session_create.restype = c_void_p
+    _CORE.aifw_session_destroy.argtypes = [c_void_p]
+    _CORE.aifw_session_destroy.restype = None
+    # Mask / spans / restore
+    _CORE.aifw_session_mask_and_out_meta.argtypes = [c_void_p, c_char_p, c_void_p, c_uint32, c_uint8, POINTER(c_void_p), POINTER(c_void_p)]
+    _CORE.aifw_session_mask_and_out_meta.restype = c_uint16
+    _CORE.aifw_session_get_pii_spans.argtypes = [c_void_p, c_char_p, c_void_p, c_uint32, c_uint8, POINTER(c_void_p), POINTER(c_uint32)]
+    _CORE.aifw_session_get_pii_spans.restype = c_uint16
+    _CORE.aifw_session_restore_with_meta.argtypes = [c_void_p, c_char_p, c_void_p, POINTER(c_void_p)]
+    _CORE.aifw_session_restore_with_meta.restype = c_uint16
+
+
+def _get_mask_bits_from_mask_config(mask_cfg: Dict[str, Any]) -> int:
+    # Fetch default from core then apply flags
+    mask_bits = int(_CORE.aifw_default_mask_bits())
+    def apply(flag, bit):
+        nonlocal mask_bits
+        if flag is True:
+            mask_bits |= bit
+        elif flag is False:
+            mask_bits &= ~bit
+    ENABLE_MASK_ADDR_BIT = 1 << 0
+    ENABLE_MASK_EMAIL_BIT = 1 << 1
+    ENABLE_MASK_ORG_BIT = 1 << 2
+    ENABLE_MASK_USER_NAME_BIT = 1 << 3
+    ENABLE_MASK_PHONE_NUMBER_BIT = 1 << 4
+    ENABLE_MASK_BANK_NUMBER_BIT = 1 << 5
+    ENABLE_MASK_PAYMENT_BIT = 1 << 6
+    ENABLE_MASK_VCODE_BIT = 1 << 7
+    ENABLE_MASK_PASSWORD_BIT = 1 << 8
+    ENABLE_MASK_RANDOM_SEED_BIT = 1 << 9
+    ENABLE_MASK_PRIVATE_KEY_BIT = 1 << 10
+    ENABLE_MASK_URL_ADDRESS_BIT = 1 << 11
+    ENABLE_MASK_ALL_BITS = (
+        ENABLE_MASK_ADDR_BIT | ENABLE_MASK_EMAIL_BIT | ENABLE_MASK_ORG_BIT | ENABLE_MASK_USER_NAME_BIT |
+        ENABLE_MASK_PHONE_NUMBER_BIT | ENABLE_MASK_BANK_NUMBER_BIT | ENABLE_MASK_PAYMENT_BIT | ENABLE_MASK_VCODE_BIT |
+        ENABLE_MASK_PASSWORD_BIT | ENABLE_MASK_RANDOM_SEED_BIT | ENABLE_MASK_PRIVATE_KEY_BIT | ENABLE_MASK_URL_ADDRESS_BIT
+    )
+    apply(mask_cfg.get("maskAddress"), ENABLE_MASK_ADDR_BIT)
+    apply(mask_cfg.get("maskEmail"), ENABLE_MASK_EMAIL_BIT)
+    apply(mask_cfg.get("maskOrganization"), ENABLE_MASK_ORG_BIT)
+    apply(mask_cfg.get("maskUserName"), ENABLE_MASK_USER_NAME_BIT)
+    apply(mask_cfg.get("maskPhoneNumber"), ENABLE_MASK_PHONE_NUMBER_BIT)
+    apply(mask_cfg.get("maskBankNumber"), ENABLE_MASK_BANK_NUMBER_BIT)
+    apply(mask_cfg.get("maskPayment"), ENABLE_MASK_PAYMENT_BIT)
+    apply(mask_cfg.get("maskVerificationCode"), ENABLE_MASK_VCODE_BIT)
+    apply(mask_cfg.get("maskPassword"), ENABLE_MASK_PASSWORD_BIT)
+    apply(mask_cfg.get("maskRandomSeed"), ENABLE_MASK_RANDOM_SEED_BIT)
+    apply(mask_cfg.get("maskPrivateKey"), ENABLE_MASK_PRIVATE_KEY_BIT)
+    apply(mask_cfg.get("maskUrl"), ENABLE_MASK_URL_ADDRESS_BIT)
+    apply(mask_cfg.get("maskAll"), ENABLE_MASK_ALL_BITS)
+    return int(mask_bits) & 0xFFFFFFFF
+
+
+def _create_session(mask_bits: int) -> int:
+    # SessionInitArgs layout: u32 enable_mask_bits, u8 ner_recog_type, 3 padding
+    init_buf = ctypes.create_string_buffer(8)
+    struct.pack_into("<IB", init_buf, 0, int(mask_bits), 0)  # rest padding left zero
+    handle = _CORE.aifw_session_create(ctypes.cast(ctypes.addressof(init_buf), c_void_p))
+    if int(handle or 0) == 0:
+        raise RuntimeError("session_create failed")
+    return handle
+
+
+def _destroy_session() -> None:
+    """Destroy core session if exists."""
+    global _SESSION_HANDLE
+    try:
+        h = _SESSION_HANDLE
+        if h is None:
+            return
+        if isinstance(h, ctypes.c_void_p):
+            if not h.value:
+                return
+            _CORE.aifw_session_destroy(h)
+        else:
+            # raw int pointer case
+            if int(h) == 0:
+                return
+            _CORE.aifw_session_destroy(c_void_p(int(h)))
+    finally:
+        _SESSION_HANDLE = c_void_p(0)
