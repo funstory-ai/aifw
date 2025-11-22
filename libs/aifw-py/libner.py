@@ -66,9 +66,9 @@ class TokenClassificationPipelinePy:
         self.id2label = id2label
         self._lang_hint = (lang_hint or "en").lower()
 
-    async def run(self, text: str, opts: Optional[Dict[str, Any]] = None) -> List[NerItem]:
+    def run(self, text: str, opts: Optional[Dict[str, Any]] = None) -> List[NerItem]:
         """
-        Re-implement token classification similar to JS:
+        Re-implement token classification similar to JS, in a synchronous fashion:
         - Tokenize text
         - Run ONNX model (quantized) via onnxruntime
         - Softmax per-token to get label + score
@@ -209,7 +209,7 @@ SUPPORTED_MODELS = {
 }
 
 
-async def build_ner_pipeline(model_id: str, options: Optional[Dict[str, Any]] = None) -> TokenClassificationPipelinePy:
+def build_ner_pipeline(model_id: str, options: Optional[Dict[str, Any]] = None) -> TokenClassificationPipelinePy:
     """
     Build a transformers-based token classification pipeline, aligned with JS expectations.
     """
@@ -219,8 +219,8 @@ async def build_ner_pipeline(model_id: str, options: Optional[Dict[str, Any]] = 
     # If modelsBase not provided, or local path missing, return a no-op pipeline
     class _NoopPipe(TokenClassificationPipelinePy):
         def __init__(self):
-            super().__init__(model=None, tokenizer=None, lang_hint=lang_hint)
-        async def run(self, text: str, opts: Optional[Dict[str, Any]] = None) -> List[NerItem]:
+            super().__init__(ort_session=None, tokenizer=None, id2label={}, lang_hint=lang_hint)
+        def run(self, text: str, opts: Optional[Dict[str, Any]] = None) -> List[NerItem]:
             return []
 
     if not base:

@@ -136,7 +136,7 @@ def _decide_script_with_opencc(text: str) -> str:
     return "Hans"
 
 
-async def detect_language(text: str) -> Dict[str, Any]:
+def detect_language(text: str) -> str:
     # Use langdetect for primary language detection
     try:
         code = langdetect_detect(text or "")
@@ -144,12 +144,12 @@ async def detect_language(text: str) -> Dict[str, Any]:
         code = "en"
     lang = "zh" if code.startswith("zh") else (code or "en")
     if not lang.startswith("zh"):
-        return {"lang": lang, "script": None, "confidence": 0.9 if lang == "en" else 0.6, "method": "langdetect"}
+        return lang
     script_quick = _quick_script_zh(text or "")
     if script_quick:
-        return {"lang": "zh", "script": script_quick, "confidence": 0.8, "method": "heuristic+langdetect"}
+        return f"zh-{script_quick}"
     script = _decide_script_with_opencc(text or "")
-    return {"lang": "zh", "script": script, "confidence": 0.95, "method": "opencc+langdetect"}
+    return f"zh-{script}"
 
 
 def init(options: Optional[Dict[str, Any]] = None) -> None:
@@ -170,8 +170,8 @@ def init(options: Optional[Dict[str, Any]] = None) -> None:
     ner_init_env({
         "modelsBase": models_base,
     })
-    _NER_EN = _sync_await(build_ner_pipeline("funstory-ai/neurobert-mini", {"quantized": True}))
-    _NER_ZH = _sync_await(build_ner_pipeline("ckiplab/bert-tiny-chinese-ner", {"quantized": True}))
+    _NER_EN = build_ner_pipeline("funstory-ai/neurobert-mini", {"quantized": True})
+    _NER_ZH = build_ner_pipeline("ckiplab/bert-tiny-chinese-ner", {"quantized": True})
     # Load native core via ctypes
     _load_core_native(options or {})
     # Create session
@@ -211,38 +211,6 @@ def _select_language(input_text: str, language: Optional[str]) -> str:
             return "zh-TW" if script == "Hant" else "zh-CN"
         return code or "en"
     return lang_to_use
-
-
-def _entity_type_str_to_code(entity_type: str) -> int:
-    """
-    Map entity type string to enum code compatible with js core mapping.
-    """
-    et = (entity_type or "").upper()
-    if et in ("PER", "PERSON", "USER_NAME"):
-        return 4
-    if et == "ORGANIZATION" or et == "ORG":
-        return 3
-    if et in ("LOC", "GPE", "FAC", "ADDRESS", "PHYSICAL_ADDRESS"):
-        return 1
-    if et == "EMAIL_ADDRESS":
-        return 2
-    if et == "PHONE_NUMBER":
-        return 5
-    if et == "BANK_NUMBER":
-        return 6
-    if et == "PAYMENT":
-        return 7
-    if et in ("VERIFY_CODE", "VERIFICATION_CODE"):
-        return 8
-    if et == "PASSWORD":
-        return 9
-    if et == "RANDOM_SEED":
-        return 10
-    if et == "PRIVATE_KEY":
-        return 11
-    if et in ("URL", "URL_ADDRESS"):
-        return 12
-    return 0
 
 
 @dataclass
@@ -304,7 +272,7 @@ def mask_text(input_text: str, language: Optional[str] = None) -> Tuple[str, byt
             run_opts = {"offsetText": input_text, "tokenTransform": (lambda s: t2s.convert(s))}
         except Exception:
             pass
-    items = _sync_await(ner_pipe.run(run_text, run_opts))
+    items = ner_pipe.run(run_text, run_opts)
     ner_buf = _build_ner_entities_buffer(items, input_text)
     try:
         # Prepare inputs
@@ -335,15 +303,14 @@ def mask_text(input_text: str, language: Optional[str] = None) -> Tuple[str, byt
         pass
 
 
-def restore_text(masked_text: str, mask_meta: Union[bytes, bytearray, memoryview, Dict[str, Any]]) -> str:
+def restore_text(masked_text: str, mask_meta: bytes) -> str:
     """
     Restore text: upload serialized meta bytes to wasm memory; core frees it.
     """
     _ensure_ready()
-    meta_bytes = bytes(mask_meta)
     in_masked = ctypes.create_string_buffer((masked_text or "").encode("utf-8") + b"\x00")
-    meta_ptr = _CORE.aifw_malloc(c_size_t(len(meta_bytes)))
-    ctypes.memmove(meta_ptr, meta_bytes, len(meta_bytes))
+    meta_ptr = _CORE.aifw_malloc(c_size_t(len(mask_meta)))
+    ctypes.memmove(meta_ptr, mask_meta, len(mask_meta))
     out_restored = c_void_p()
     rc = _CORE.aifw_session_restore_with_meta(_SESSION_HANDLE, ctypes.cast(in_masked, c_char_p), meta_ptr, byref(out_restored))
     if rc != 0:
@@ -405,7 +372,7 @@ def get_pii_spans(input_text: str, language: Optional[str] = None) -> List[Match
             run_opts = {"offsetText": input_text, "tokenTransform": (lambda s: t2s.convert(s))}
         except Exception:
             pass
-    items = _sync_await(ner_pipe.run(run_text, run_opts))
+    items = ner_pipe.run(run_text, run_opts)
     ner_buf = _build_ner_entities_buffer(items, input_text)
     try:
         in_c = ctypes.create_string_buffer((input_text or "").encode("utf-8") + b"\x00")
@@ -518,8 +485,8 @@ def _to_core_and_tag(label: str) -> Tuple[str, int]:
     return "MISC", 0
 
 
-def _to_entity_type(core: str) -> int:
-    c = core.upper()
+def _to_entity_type(entity_type_str: str) -> int:
+    c = entity_type_str.upper()
     if c in ("PER", "PERSON"):
         return 4
     if c == "ORG":
@@ -588,26 +555,6 @@ def _build_ner_entities_buffer(items: List[Dict[str, Any]] or List[Any], js_text
         "byteSize": total,
         "keep": (ba, cbuf),
     }
-
-def _sync_await(coro):
-    import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            new_loop = asyncio.new_event_loop()
-            try:
-                return new_loop.run_until_complete(coro)
-            finally:
-                new_loop.close()
-        else:
-            return loop.run_until_complete(coro)
-    except RuntimeError:
-        new_loop = asyncio.new_event_loop()
-        try:
-            return new_loop.run_until_complete(coro)
-        finally:
-            new_loop.close()
-
 
 # ---- Native core wiring via ctypes ----
 def _load_core_native(options: Dict[str, Any]) -> None:
