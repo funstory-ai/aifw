@@ -1201,12 +1201,36 @@ pub export fn aifw_malloc(n: usize) [*:0]allowzero u8 {
     return @ptrCast(slice.ptr);
 }
 
-pub export fn aifw_free_sized(ptr: [*:0]allowzero u8, n: usize) void {
+pub export fn aifw_free_sized(ptr: [*:0]allowzero u8, n: usize, align_size: u8) void {
     if (SHOULD_LOCK_API) {
         api_mutex.lock();
         defer api_mutex.unlock();
     }
     if (@intFromPtr(ptr) == 0) return;
-    const p: [*:0]u8 = @ptrCast(ptr);
-    globalAllocator().free(p[0..n]);
+    switch (align_size) {
+        1 => {
+            const p: [*:0]u8 = @ptrCast(ptr);
+            const len = n;
+            globalAllocator().free(p[0..len]);
+        },
+        2 => {
+            const p2: [*:0]u16 = @ptrCast(@alignCast(ptr));
+            const len = @divExact(n, 2);
+            globalAllocator().free(p2[0..len]);
+        },
+        4 => {
+            const p4: [*:0]u32 = @ptrCast(@alignCast(ptr));
+            const len = @divExact(n, 4);
+            globalAllocator().free(p4[0..len]);
+        },
+        8 => {
+            const p8: [*:0]u64 = @ptrCast(@alignCast(ptr));
+            const len = @divExact(n, 8);
+            globalAllocator().free(p8[0..len]);
+        },
+        else => {
+            std.log.err("[c-api] free_sized invalid align_size={d}", .{align_size});
+            unreachable;
+        },
+    }
 }

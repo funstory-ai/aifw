@@ -8,35 +8,28 @@ from flask import Flask, render_template, request, jsonify
 import os
 import sys
 
-# Add py-origin to path to import AIFW modules
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'py-origin'))
+# Add cli/python to path to import AIFW modules
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'cli', 'python'))
+
 
 try:
     from services.app.one_aifw_api import OneAIFWAPI
-    from services.app.anonymizer import AnonymizerWrapper
-    from services.app.analyzer import AnalyzerWrapper
 except ImportError as e:
     print(f"Warning: Could not import AIFW modules: {e}")
     print("Make sure you're running from the correct directory and py-origin is available")
     OneAIFWAPI = None
-    AnonymizerWrapper = None
-    AnalyzerWrapper = None
 
 app = Flask(__name__)
 
 # Initialize AIFW API
 aifw_api = None
-anonymizer = None
-analyzer = None
 
 def initialize_aifw():
     """Initialize AIFW components"""
-    global aifw_api, anonymizer, analyzer
+    global aifw_api
     try:
         if OneAIFWAPI:
             aifw_api = OneAIFWAPI()
-            analyzer = AnalyzerWrapper()
-            anonymizer = AnonymizerWrapper(analyzer)
             return True
     except Exception as e:
         print(f"Error initializing AIFW: {e}")
@@ -67,21 +60,19 @@ def mask_text():
             return jsonify({"error": "Missing 'text' field"}), 400
         
         text = data['text']
-        language = data.get('language', 'en')
+        language = data.get('language', 'auto')
         
         if not text.strip():
             return jsonify({"error": "Text cannot be empty"}), 400
         
-        if not anonymizer or not analyzer:
-            return jsonify({"error": "AIFW anonymizer not available"}), 500
-        
-        # Perform anonymization
-        result = anonymizer.anonymize(text=text, language=language)
+        # Perform masking via OneAIFWAPI (uses aifw-py under the hood)
+        result = aifw_api.mask_text(text=text, language=language)
         
         return jsonify({
             "original_text": text,
             "anonymized_text": result["text"],
-            "placeholders_map": result["placeholdersMap"],
+            # maskMeta is base64-encoded binary meta; keep name for backward UI compat
+            "placeholders_map": result["maskMeta"],
             "language": language
         })
         
@@ -97,18 +88,16 @@ def restore_text():
             return jsonify({"error": "Missing 'text' or 'placeholders_map' field"}), 400
         
         text = data['text']
-        placeholders_map = data['placeholders_map']
+        # For new aifw-py flow, placeholders_map actually carries base64-encoded maskMeta bytes
+        mask_meta_b64 = data['placeholders_map']
         
-        if not anonymizer:
-            return jsonify({"error": "AIFW anonymizer not available"}), 500
-        
-        # Perform restoration
-        restored_text = anonymizer.restore(text=text, placeholders_map=placeholders_map)
+        # Perform restoration via OneAIFWAPI (expects base64 or raw bytes)
+        restored_text = aifw_api.restore_text(text=text, mask_meta=mask_meta_b64)
         
         return jsonify({
             "anonymized_text": text,
             "restored_text": restored_text,
-            "placeholders_map": placeholders_map
+            "placeholders_map": mask_meta_b64
         })
         
     except Exception as e:
@@ -123,29 +112,17 @@ def analyze_text():
             return jsonify({"error": "Missing 'text' field"}), 400
         
         text = data['text']
-        language = data.get('language', 'en')
+        language = data.get('language', 'auto')
         
-        if not analyzer:
-            return jsonify({"error": "AIFW analyzer not available"}), 500
+        if not aifw_api:
+            return jsonify({"error": "AIFW API not available"}), 500
         
-        # Perform analysis
-        entities = analyzer.analyze(text=text, language=language)
-        
-        # Convert entities to serializable format
-        entities_data = []
-        for entity in entities:
-            entities_data.append({
-                "entity_type": entity.entity_type,
-                "start": entity.start,
-                "end": entity.end,
-                "score": entity.score,
-                "text": entity.text
-            })
-        
+        # Perform analysis via OneAIFWAPI get_pii_entities
+        entities = aifw_api.get_pii_entities(text=text, language=language)
         return jsonify({
             "text": text,
             "language": language,
-            "entities": entities_data
+            "entities": entities
         })
         
     except Exception as e:
@@ -188,7 +165,5 @@ def call_llm():
 if __name__ == '__main__':
     print("Starting AIFW Web Module...")
     print(f"AIFW API available: {aifw_api is not None}")
-    print(f"Anonymizer available: {anonymizer is not None}")
-    print(f"Analyzer available: {analyzer is not None}")
     
     app.run(debug=False, host='0.0.0.0', port=5001)

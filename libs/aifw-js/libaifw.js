@@ -187,9 +187,14 @@ function readZigStr(ptr) {
   return new TextDecoder().decode(mem.subarray(ptr, end));
 }
 
-function freeBuf(ptr, size) {
+function freeBuf(ptr, size, align = 1) {
   if (!ptr || !size) return;
-  wasm.aifw_free_sized(ptr, size);
+  // aifw_malloc allocates u8 buffers (align=1); core spans use align=4, etc.
+  try {
+    wasm.aifw_free_sized(ptr, size, align >>> 0);
+  } catch (e) {
+    console.warn('[aifw-js] aifw_free_sized failed', e);
+  }
 }
 
 async function loadAifwCore() {
@@ -835,9 +840,8 @@ export async function getPiiSpans(inputText, language) {
       const matched_end = dvSpan.getUint32(base + 12, true);
       res.push(new MatchedPIISpan(entity_id, entity_type, matched_start, matched_end));
     }
-    // Free spans buffer allocated by aifw core
-    if (spansPtr && count) freeBuf(spansPtr, count * spanSize);
-    // aifw core may free spans later; caller only reads
+    // Free spans buffer allocated by aifw core (MatchedPIISpan, 16 bytes, align=4)
+    if (spansPtr && count) freeBuf(spansPtr, count * spanSize, 4);
     return res;
   } finally {
     if (outSpansPtrPtr) freeBuf(outSpansPtrPtr, 4);
