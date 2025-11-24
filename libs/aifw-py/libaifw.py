@@ -293,10 +293,10 @@ def mask_text(input_text: str, language: Optional[str] = None) -> Tuple[str, byt
             raise RuntimeError(f"mask failed rc={rc}")
         masked_text = ctypes.string_at(out_masked).decode("utf-8", errors="ignore")
         _CORE.aifw_string_free(out_masked)
-        # mask meta: read length u32 then bytes
+        # mask meta: read length u32 then bytes (allocated as u8[], align=1)
         total_len = struct.unpack("<I", ctypes.string_at(out_meta, 4))[0]
         meta_bytes = ctypes.string_at(out_meta, total_len)
-        _CORE.aifw_free_sized(out_meta, c_size_t(total_len))
+        _CORE.aifw_free_sized(out_meta, c_size_t(total_len), c_uint8(1))
         return masked_text, meta_bytes
     finally:
         # ner_buf created in Python memory; no core free needed
@@ -401,7 +401,7 @@ def get_pii_spans(input_text: str, language: Optional[str] = None) -> List[Match
             matched_end = int(struct.unpack_from("<I", raw, base + 12)[0])
             out.append(MatchedPIISpan(entity_id, entity_type, matched_start, matched_end))
         if int(out_spans.value or 0) and out_count.value:
-            _CORE.aifw_free_sized(out_spans, c_size_t(out_count.value * span_size))
+            _CORE.aifw_free_sized(out_spans, c_size_t(out_count.value * span_size), c_uint8(4))
         return out
     finally:
         pass
@@ -594,7 +594,7 @@ def _bind_core_signatures() -> None:
     _CORE.aifw_default_mask_bits.restype = c_uint32
     _CORE.aifw_malloc.argtypes = [c_size_t]
     _CORE.aifw_malloc.restype = c_void_p
-    _CORE.aifw_free_sized.argtypes = [c_void_p, c_size_t]
+    _CORE.aifw_free_sized.argtypes = [c_void_p, c_size_t, c_uint8]
     _CORE.aifw_free_sized.restype = None
     _CORE.aifw_string_free.argtypes = [c_void_p]
     _CORE.aifw_string_free.restype = None
