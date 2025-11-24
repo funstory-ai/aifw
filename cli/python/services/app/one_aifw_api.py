@@ -86,10 +86,41 @@ class OneAIFWAPI:
         """
         lang = None if (language is None or language == "" or language == "auto") else language
         spans = self._aifw.get_pii_spans(text, lang)
+
+        # matched_start / matched_end from core are UTF-8 byte offsets.
+        # Build a map from byte offset -> character index so that frontend
+        # can safely slice Python strings with character-based indices.
+        utf8 = text.encode("utf-8")
+        n_bytes = len(utf8)
+        byte_to_char: List[int] = [0] * (n_bytes + 1)
+        byte_pos = 0
+        for char_index, ch in enumerate(text):
+            byte_to_char[byte_pos] = char_index
+            byte_pos += len(ch.encode("utf-8"))
+        # Ensure the terminal position maps to len(text)
+        if byte_pos == n_bytes:
+            byte_to_char[n_bytes] = len(text)
+        else:
+            byte_to_char[-1] = len(text)
+
+        def _byte_off_to_char(off: int) -> int:
+            if off <= 0:
+                return 0
+            if off >= len(byte_to_char):
+                return len(text)
+            # If offset does not land exactly on a recorded boundary,
+            # clamp to the nearest previous character boundary.
+            idx = off
+            while idx > 0 and byte_to_char[idx] == 0:
+                idx -= 1
+            return byte_to_char[idx]
+
         results: List[Dict[str, Any]] = []
         for s in spans:
-            start = int(getattr(s, "matched_start", 0))
-            end = int(getattr(s, "matched_end", 0))
+            b_start = int(getattr(s, "matched_start", 0))
+            b_end = int(getattr(s, "matched_end", 0))
+            start = _byte_off_to_char(b_start)
+            end = _byte_off_to_char(b_end)
             frag = text[start:end]
             results.append(
                 {

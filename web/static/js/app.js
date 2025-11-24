@@ -114,7 +114,7 @@ class AIFWApp {
                 this.originalText = data.original_text;
                 this.anonymizedText = data.anonymized_text;
                 this.placeholdersMap = data.placeholders_map;
-                this.displayMasking(data.original_text, data.anonymized_text, data.placeholders_map);
+                this.displayMasking(data.original_text, data.anonymized_text);
                 document.getElementById('restoreBtn').disabled = false;
                 this.showAlert('success', '文本匿名化完成');
             } else {
@@ -165,15 +165,36 @@ class AIFWApp {
         document.getElementById('processedText').textContent = `检测到 ${entities.length} 个敏感信息实体`;
         
         this.displayEntities(entities);
+        const placeholdersMap = this.entitiesToPlaceholdersMap(entities);
+        this.displayPlaceholders(placeholdersMap);
+        // Show both entities and placeholder table when analyzing
         document.getElementById('entitiesSection').style.display = 'block';
-        document.getElementById('placeholdersSection').style.display = 'none';
+        document.getElementById('placeholdersSection').style.display = 'block';
     }
 
-    displayMasking(original, anonymized, placeholders) {
+    // Build a placeholder map from detected entities for display purpose
+    entitiesToPlaceholdersMap(entities) {
+        const placeholders = {};
+        let counter = 0;
+
+        entities.forEach((entity) => {
+            counter += 1;
+            let type = entity.entity_type;
+            // Normalize entity type to string for placeholder construction
+            if (typeof type !== 'string') {
+                type = `TYPE_${String(type)}`;
+            }
+            const placeholder = `__PII_${type}_${counter}__`;
+            placeholders[placeholder] = entity.text;
+        });
+
+        return placeholders;
+    }
+
+    displayMasking(original, anonymized) {
         document.getElementById('originalText').textContent = original;
         document.getElementById('processedText').textContent = anonymized;
         
-        this.displayPlaceholders(placeholders);
         document.getElementById('entitiesSection').style.display = 'none';
         document.getElementById('placeholdersSection').style.display = 'block';
     }
@@ -188,27 +209,55 @@ class AIFWApp {
         tbody.innerHTML = '';
         
         entities.forEach(entity => {
+            // Normalize entity_type which can be string (e.g. "EMAIL_ADDRESS")
+            // or numeric enum id from backend (e.g. 2 for EMAIL_ADDRESS)
+            let typeKey = entity.entity_type;
+            if (typeof typeKey !== 'string') {
+                typeKey = this.entityTypeIdToName(typeKey);
+            }
+
             const row = tbody.insertRow();
-            row.insertCell(0).textContent = this.getEntityTypeName(entity.entity_type);
+            row.insertCell(0).textContent = this.getEntityTypeName(typeKey);
             row.insertCell(1).textContent = entity.text;
             row.insertCell(2).textContent = `${entity.start}-${entity.end}`;
             row.insertCell(3).textContent = (entity.score * 100).toFixed(1) + '%';
             
             // 添加类型样式
             const typeCell = row.cells[0];
-            typeCell.className = `entity-${entity.entity_type.toLowerCase().replace('_', '-')}`;
+            const cssKey = String(typeKey).toLowerCase().replace('_', '-');
+            typeCell.className = `entity-${cssKey}`;
         });
     }
 
     displayPlaceholders(placeholders) {
         const tbody = document.getElementById('placeholdersTable');
         tbody.innerHTML = '';
-        
+        console.log('[AIFW Web] displayPlaceholders input:', placeholders);
         Object.entries(placeholders).forEach(([placeholder, original]) => {
             const row = tbody.insertRow();
             row.insertCell(0).textContent = placeholder;
             row.insertCell(1).textContent = original;
         });
+    }
+
+    // Map backend EntityType enum id to string name used by UI
+    entityTypeIdToName(id) {
+        const map = {
+            0: 'NONE',
+            1: 'PHYSICAL_ADDRESS',
+            2: 'EMAIL_ADDRESS',
+            3: 'ORGANIZATION',
+            4: 'USER_MAME',
+            5: 'PHONE_NUMBER',
+            6: 'BANK_NUMBER',
+            7: 'PAYMENT',
+            8: 'VERIFICATION_CODE',
+            9: 'PASSWORD',
+            10: 'RANDOM_SEED',
+            11: 'PRIVATE_KEY',
+            12: 'URL_ADDRESS',
+        };
+        return map[id] || `TYPE_${id}`;
     }
 
     getEntityTypeName(type) {
