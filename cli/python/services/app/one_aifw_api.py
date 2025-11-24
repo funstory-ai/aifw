@@ -53,9 +53,8 @@ class OneAIFWAPI:
 
     def __del__(self):
         self._aifw.deinit()
-        self.aifw.shutdown()
-        self.aifw = None
-        self.llm = None
+        self._aifw = None
+        self._llm = None
 
     # Public API
     def mask_text(self, text: str, language: Optional[str] = None) -> Dict[str, Any]:
@@ -79,6 +78,29 @@ class OneAIFWAPI:
         except Exception:
             meta_bytes = b""
         return self._aifw.restore_text(text, meta_bytes)
+
+    def get_pii_entities(self, text: str, language: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Analyze text and return PII spans using aifw core get_pii_spans().
+        Returns a list of dicts with {entity_id, entity_type, start, end, text}.
+        """
+        lang = None if (language is None or language == "" or language == "auto") else language
+        spans = self._aifw.get_pii_spans(text, lang)
+        results: List[Dict[str, Any]] = []
+        for s in spans:
+            start = int(getattr(s, "matched_start", 0))
+            end = int(getattr(s, "matched_end", 0))
+            frag = text[start:end]
+            results.append(
+                {
+                    "entity_id": int(getattr(s, "entity_id", 0)),
+                    "entity_type": int(getattr(s, "entity_type", 0)),
+                    "start": start,
+                    "end": end,
+                    "text": frag,
+                }
+            )
+        return results
 
     # def mask_text_batch(self, texts: List[str], language: Optional[str] = None) -> List[Dict[str, Any]]:
     #     """Mask a batch of texts and return batch of masked texts plus matching metadatas for restoration."""
