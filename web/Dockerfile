@@ -4,48 +4,53 @@ FROM ${BASE_IMAGE}
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     AIFW_WORK_DIR=/data/aifw \
-    XDG_CONFIG_HOME=/data/config
+    XDG_CONFIG_HOME=/data/config \
+    AIFW_MODELS_BASE=/opt/aifw/ner-models
 
 WORKDIR /opt/aifw
 
-# Build-time profile to control spaCy models
-ARG SPACY_PROFILE=minimal
-
 # Copy requirements first for better cache
 COPY web/requirements.txt /opt/aifw/web/requirements.txt
-COPY py-origin/services/requirements.txt /opt/aifw/services/requirements.txt
-COPY py-origin/cli/requirements.txt /opt/aifw/cli/requirements.txt
+COPY cli/python/requirements.txt /opt/aifw/cli/python/requirements.txt
+COPY libs/aifw-py/requirements.txt /opt/aifw/libs/aifw-py/requirements.txt
 
-RUN pip install --upgrade pip && \
+# System deps (git for fetching model assets) and Python deps
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --upgrade pip && \
     pip install --no-cache-dir -r /opt/aifw/web/requirements.txt && \
-    pip install --no-cache-dir -r /opt/aifw/services/requirements.txt && \
-    pip install --no-cache-dir -r /opt/aifw/cli/requirements.txt && \
+    pip install --no-cache-dir -r /opt/aifw/cli/python/requirements.txt && \
+    pip install --no-cache-dir -r /opt/aifw/libs/aifw-py/requirements.txt && \
     python -m pip cache purge || true
-
-# Install spaCy models per profile
-RUN set -e; \
-    python -m spacy download en_core_web_sm; \
-    python -m spacy download zh_core_web_sm || true; \
-    if [ "$SPACY_PROFILE" = "fr" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download fr_core_news_sm || true; fi; \
-    if [ "$SPACY_PROFILE" = "de" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download de_core_news_sm || true; fi; \
-    if [ "$SPACY_PROFILE" = "ja" ] || [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download ja_core_news_sm || true; fi; \
-    if [ "$SPACY_PROFILE" = "multi" ]; then python -m spacy download xx_ent_wiki_sm || true; fi; \
-    find /usr/local/lib -type d -name '__pycache__' -prune -exec rm -rf {} + || true && \
-    find /usr/local/lib -type f -name '*.pyc' -delete || true
 
 # Copy web application files
 COPY web/*.py /opt/aifw/web/
 COPY web/templates/ /opt/aifw/web/templates/
 COPY web/static/ /opt/aifw/web/static/
 
-# Copy py-origin modules that web app depends on
-COPY py-origin/aifw/*.py /opt/aifw/aifw/
-COPY py-origin/services/app/*.py /opt/aifw/services/app/
-COPY py-origin/services/app/*.json /opt/aifw/services/app/
-COPY py-origin/services/fake_llm/*.py /opt/aifw/services/fake_llm/
+# Copy CLI / services code and aifw-py library into image
+COPY cli/python /opt/aifw/cli/python
+COPY libs/aifw-py /opt/aifw/libs/aifw-py
 
-# Copy default config template (no secrets)
-COPY py-origin/assets/*.yaml py-origin/assets/*.json /opt/aifw/assets/
+# Copy assets metadata and (optionally) pre-fetched models / wasm if present
+COPY assets/*.yaml assets/*.json /opt/aifw/assets/
+
+# If OneAIFW-Assets repo is present in build context, copy its models;
+# otherwise clone from GitHub (public repo) at build time.
+RUN set -e; \
+    mkdir -p "${AIFW_MODELS_BASE}"; \
+    if [ -d "/opt/aifw/OneAIFW-Assets/models" ]; then \
+      cp -R /opt/aifw/OneAIFW-Assets/models/* "${AIFW_MODELS_BASE}/"; \
+    else \
+      git clone --depth 1 https://github.com/funstory-ai/OneAIFW-Assets.git /opt/aifw-assets && \
+      cp -R /opt/aifw-assets/models/* "${AIFW_MODELS_BASE}/" && \
+      rm -rf /opt/aifw-assets; \
+    fi
+
+# Copy prebuilt Zig core shared library if provided by CI (zig-out/lib)
+# Expected to contain liboneaifw_core.so built for Linux.
+COPY zig-out/lib /opt/aifw/zig-out/lib
 
 # Ensure runtime dirs; no API keys baked in image
 RUN mkdir -p ${AIFW_WORK_DIR} /var/log/aifw && \
