@@ -1050,7 +1050,8 @@ var gpa_inst = if (is_freestanding)
 else if (is_debug)
     std.heap.GeneralPurposeAllocator(.{}){}
 else
-    std.heap.SmpAllocator{};
+    // For Release* hosted builds, use the global SMP allocator optimized for multi-threading
+    std.heap.smp_allocator;
 
 // Serialize API entry points to make allocator usage thread-safe in WASM
 var api_mutex: std.Thread.Mutex = .{};
@@ -1062,7 +1063,8 @@ fn globalAllocator() std.mem.Allocator {
     } else if (is_debug) {
         return gpa_inst.allocator();
     } else {
-        return gpa_inst.allocator();
+        // In Release* builds we use the global smp_allocator which is already an Allocator
+        return gpa_inst;
     }
 }
 
