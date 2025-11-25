@@ -13,8 +13,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Setup Rust (stable + wasm32 target)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
