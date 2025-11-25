@@ -4,9 +4,9 @@ Werkzeug==2.3.7
 pip
 
 # aifw-py runtime dependencies used by web service
-numpy>=1.26.0
-transformers>=4.46.0
-
-# language detection & optional zh Hans/Hant detection
 langdetect>=1.0.9
+transformers>=4.46.0
+onnxruntime>=1.18.0
+numpy>=1.26.0
+# Optional for better zh Hans/Hant detection:
 opencc-python-reimplemented>=0.1.7
