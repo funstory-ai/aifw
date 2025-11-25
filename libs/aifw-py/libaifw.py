@@ -41,6 +41,25 @@ _CORE = None  # ctypes.CDLL
 _SESSION_HANDLE = c_void_p(0)
 
 
+# Mirror core/aifw_core.zig extern structs used in session configuration.
+class MaskConfig(ctypes.Structure):
+    _fields_ = [
+        ("enable_mask_bits", c_uint32),
+    ]
+
+
+class RestoreConfig(ctypes.Structure):
+    # Currently empty extern struct
+    _fields_: list[tuple[str, Any]] = []
+
+
+class SessionConfig(ctypes.Structure):
+    _fields_ = [
+        ("mask_config", MaskConfig),
+        ("restore_config", RestoreConfig),
+    ]
+
+
 # Language/script detection helpers (heuristics + optional OpenCC)
 _SIMPLIFIED_ONLY = set([
     "后", "发", "台", "里", "复", "面", "余", "划", "钟", "观", "厂", "广", "圆", "国", "东", "乐", "云", "内", "两",
@@ -197,6 +216,23 @@ def deinit() -> None:
     _NER_EN = None
     _NER_ZH = None
     _SESSION_OPEN = False
+
+
+def config(mask_cfg: Dict[str, Any]) -> None:
+    """
+    Configure the session with new mask configuration.
+    """
+    global _SESSION_OPEN, _SESSION_HANDLE
+    # Ensure core and session are ready
+    _ensure_ready()
+    # Compute new mask bits from config (starting from core default bits)
+    new_bits = _get_mask_bits_from_mask_config(mask_cfg or {})
+    sess_cfg = SessionConfig(
+        mask_config=MaskConfig(enable_mask_bits=new_bits),
+        restore_config=RestoreConfig(),
+    )
+    _CORE.aifw_session_config(_SESSION_HANDLE, byref(sess_cfg))
+    logger.info("[aifw-py] mask config updated.")
 
 
 def _select_language(input_text: str, language: Optional[str]) -> str:
@@ -603,6 +639,8 @@ def _bind_core_signatures() -> None:
     _CORE.aifw_session_create.restype = c_void_p
     _CORE.aifw_session_destroy.argtypes = [c_void_p]
     _CORE.aifw_session_destroy.restype = None
+    _CORE.aifw_session_config.argtypes = [c_void_p, ctypes.POINTER(SessionConfig)]
+    _CORE.aifw_session_config.restype = None
     # Mask / spans / restore
     _CORE.aifw_session_mask_and_out_meta.argtypes = [c_void_p, c_char_p, c_void_p, c_uint32, c_uint8, POINTER(c_void_p), POINTER(c_void_p)]
     _CORE.aifw_session_mask_and_out_meta.restype = c_uint16

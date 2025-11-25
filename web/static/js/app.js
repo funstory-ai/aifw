@@ -21,6 +21,11 @@ class AIFWApp {
         document.getElementById('restoreBtn').addEventListener('click', () => this.restoreText());
         document.getElementById('clearBtn').addEventListener('click', () => this.clearAll());
         document.getElementById('startAnimation').addEventListener('click', () => this.startWorkflowAnimation());
+        // Update mask configuration immediately when user changes checkbox
+        const addrEl = document.getElementById('maskAddressCheckbox');
+        if (addrEl) {
+            addrEl.addEventListener('change', () => this.updateMaskConfig());
+        }
     }
 
     async checkHealth() {
@@ -55,6 +60,37 @@ class AIFWApp {
             alert.style.display = 'block';
         } else {
             alert.style.display = 'none';
+        }
+    }
+
+    // Collect mask configuration from UI checkboxes.
+    // Currently only PHYSICAL_ADDRESS is configurable; other types are always protected.
+    getMaskConfigFromUI() {
+        const cfg = {};
+        const addrEl = document.getElementById('maskAddressCheckbox');
+        if (addrEl) {
+            cfg.maskAddress = !!addrEl.checked;
+        }
+        return cfg;
+    }
+
+    // Send updated mask configuration to backend immediately after user changes settings.
+    async updateMaskConfig() {
+        const maskConfig = this.getMaskConfigFromUI();
+        try {
+            const response = await fetch('/api/config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ mask_config: maskConfig })
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                console.error('[AIFW Web] /api/config failed:', data);
+            }
+        } catch (error) {
+            console.error('[AIFW Web] /api/config network error:', error);
         }
     }
 

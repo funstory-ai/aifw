@@ -95,17 +95,68 @@
                             </div>
                             <div class="col-md-6">
                                 <h5><i class="fas fa-lock text-success me-2"></i>保护内容</h5>
-                                <ul class="list-unstyled">
-                                    <li><i class="fas fa-check text-success me-2"></i>物理地址</li>
-                                    <li><i class="fas fa-check text-success me-2"></i>邮箱地址</li>
-                                    <li><i class="fas fa-check text-success me-2"></i>姓名（可选）</li>
-                                    <li><i class="fas fa-check text-success me-2"></i>电话号码</li>
-                                    <li><i class="fas fa-check text-success me-2"></i>银行账户</li>
-                                    <li><i class="fas fa-check text-success me-2"></i>支付信息</li>
-                                    <li><i class="fas fa-check text-success me-2"></i>验证码</li>
-                                    <li><i class="fas fa-check text-success me-2"></i>密码</li>
-                                    <li><i class="fas fa-check text-success me-2"></i>私钥</li>
-                                </ul>
+                                <p class="mb-2 text-muted" style="font-size: 0.9rem;">
+                                    勾选表示将该类型信息进行匿名化保护。灰色且已勾选的项目为系统默认强制保护，当前仅
+                                    <strong>物理地址</strong> 支持按需开启或关闭保护。
+                                </p>
+                                <div class="list-unstyled">
+                                    <!-- 可选项：物理地址 -->
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input" type="checkbox" id="maskAddressCheckbox">
+                                        <label class="form-check-label" for="maskAddressCheckbox">
+                                            <i class="fas fa-map-marker-alt text-success me-2"></i>物理地址（可选）
+                                        </label>
+                                    </div>
+                                    <!-- 以下为默认始终保护，不可修改 -->
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input" type="checkbox" id="maskEmailCheckbox" checked disabled>
+                                        <label class="form-check-label text-muted" for="maskEmailCheckbox">
+                                            <i class="fas fa-envelope text-success me-2"></i>邮箱地址（始终保护）
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input" type="checkbox" id="maskUserNameCheckbox" checked disabled>
+                                        <label class="form-check-label text-muted" for="maskUserNameCheckbox">
+                                            <i class="fas fa-user text-success me-2"></i>姓名 / 用户名（始终保护）
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input" type="checkbox" id="maskPhoneCheckbox" checked disabled>
+                                        <label class="form-check-label text-muted" for="maskPhoneCheckbox">
+                                            <i class="fas fa-phone text-success me-2"></i>电话号码（始终保护）
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input" type="checkbox" id="maskBankCheckbox" checked disabled>
+                                        <label class="form-check-label text-muted" for="maskBankCheckbox">
+                                            <i class="fas fa-credit-card text-success me-2"></i>银行账户 / 卡号（始终保护）
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input" type="checkbox" id="maskPaymentCheckbox" checked disabled>
+                                        <label class="form-check-label text-muted" for="maskPaymentCheckbox">
+                                            <i class="fas fa-wallet text-success me-2"></i>支付信息（始终保护）
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input" type="checkbox" id="maskVcodeCheckbox" checked disabled>
+                                        <label class="form-check-label text-muted" for="maskVcodeCheckbox">
+                                            <i class="fas fa-shield-alt text-success me-2"></i>验证码（始终保护）
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input" type="checkbox" id="maskPasswordCheckbox" checked disabled>
+                                        <label class="form-check-label text-muted" for="maskPasswordCheckbox">
+                                            <i class="fas fa-key text-success me-2"></i>密码（始终保护）
+                                        </label>
+                                    </div>
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input" type="checkbox" id="maskPrivateKeyCheckbox" checked disabled>
+                                        <label class="form-check-label text-muted" for="maskPrivateKeyCheckbox">
+                                            <i class="fas fa-user-secret text-success me-2"></i>私钥（始终保护）
+                                        </label>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>

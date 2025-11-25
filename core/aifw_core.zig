@@ -329,6 +329,10 @@ pub const MaskConfig = extern struct {
     }
 };
 
+pub const RestoreConfig = extern struct {
+    // no config yet
+};
+
 pub const MaskInitArgs = struct {
     mask_config: MaskConfig,
     regex_list: []const RegexRecognizer,
@@ -342,6 +346,11 @@ pub const RestoreInitArgs = struct {
 pub const PipelineInitArgs = union(PipelineKind) {
     mask: MaskInitArgs,
     restore: RestoreInitArgs,
+};
+
+pub const PipelineConfig = union(PipelineKind) {
+    mask: MaskConfig,
+    restore: RestoreConfig,
 };
 
 pub const MaskArgs = struct {
@@ -408,6 +417,13 @@ pub const Pipeline = union(PipelineKind) {
         }
     }
 
+    pub fn config(self: *Pipeline, pipeline_config: PipelineConfig) void {
+        switch (self.*) {
+            .mask => self.mask.config(pipeline_config.mask),
+            .restore => {},
+        }
+    }
+
     pub fn run(self: *const Pipeline, args: PipelineArgs) !PipelineResult {
         switch (self.*) {
             .mask => return self.mask.run(args.mask),
@@ -436,6 +452,10 @@ pub const MaskPipeline = struct {
         for (self.regex_list) |r| r.deinit();
         // ner_recognizer is owned by Session; do not deinit here
         self.allocator.free(self.regex_list);
+    }
+
+    pub fn config(self: *MaskPipeline, mask_config: MaskConfig) void {
+        self.mask_config = mask_config;
     }
 
     fn isSpanOverlapping(a: RecogEntity, b: RecogEntity) bool {
@@ -740,6 +760,11 @@ pub const SessionInitArgs = extern struct {
     ner_recog_type: NerRecogType,
 };
 
+pub const SessionConfig = extern struct {
+    mask_config: MaskConfig,
+    restore_config: RestoreConfig,
+};
+
 // Here has a self-reference pointer to ner_recognizer, so the session must be allocated by create().
 // If you call init() to initialize the session, you can not copy the session to another variable.
 pub const Session = struct {
@@ -808,6 +833,11 @@ pub const Session = struct {
             .mask => &self.mask_pipeline,
             .restore => &self.restore_pipeline,
         };
+    }
+
+    pub fn config(self: *Session, session_config: SessionConfig) void {
+        self.mask_pipeline.config(.{ .mask = session_config.mask_config });
+        self.restore_pipeline.config(.{ .restore = session_config.restore_config });
     }
 
     pub fn mask_and_out_meta(self: *Session, text: [*:0]const u8, ner_entities: []const NerRecogEntity, language: Language, out_mask_meta_data: **anyopaque) ![*:0]u8 {
@@ -1084,6 +1114,18 @@ pub export fn aifw_session_destroy(session_ptr: *allowzero anyopaque) void {
     const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
     std.log.info("[c-api] session_destroy ptr=0x{x}", .{@intFromPtr(session)});
     session.destroy();
+}
+
+pub export fn aifw_session_config(session_ptr: *allowzero anyopaque, session_config: *const SessionConfig) void {
+    if (SHOULD_LOCK_API) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
+    }
+    if (@intFromPtr(session_ptr) == 0) return;
+
+    const session: *Session = @as(*Session, @ptrCast(@alignCast(session_ptr)));
+    std.log.info("[c-api] session_config ptr=0x{x}", .{@intFromPtr(session)});
+    session.config(session_config.*);
 }
 
 /// Mask the text, return the masked text and the mask meta data

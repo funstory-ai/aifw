@@ -79,6 +79,37 @@ class OneAIFWAPI:
             meta_bytes = b""
         return self._aifw.restore_text(text, meta_bytes)
 
+    def config(self, mask_config: Dict[str, Any]) -> None:
+        """
+        Configure AIFW core session (e.g. which entity types are masked).
+
+        This delegates to aifw_py.libaifw.config, which calls aifw_session_config()
+        in the Zig core. The mask_config schema mirrors the JS maskConfig:
+        {
+          "maskAddress": bool,
+          "maskEmail": bool,
+          "maskOrganization": bool,
+          "maskUserName": bool,
+          "maskPhoneNumber": bool,
+          "maskBankNumber": bool,
+          "maskPayment": bool,
+          "maskVerificationCode": bool,
+          "maskPassword": bool,
+          "maskRandomSeed": bool,
+          "maskPrivateKey": bool,
+          "maskUrl": bool,
+          "maskAll": bool
+        }
+        """
+        if not isinstance(mask_config, dict):
+            return
+        try:
+            if hasattr(self._aifw, "config"):
+                self._aifw.config(mask_config)  # type: ignore[attr-defined]
+        except Exception:
+            # Configuration errors should not crash callers; keep previous config.
+            return
+
     def get_pii_entities(self, text: str, language: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Analyze text and return PII spans using aifw core get_pii_spans().
@@ -194,5 +225,9 @@ def mask_text(text: str, language: Optional[str] = None) -> Dict[str, Any]:
 
 def restore_text(text: str, mask_meta: Any) -> str:
     return api.restore_text(text=text, mask_meta=mask_meta)
+
+
+def config(mask_config: Dict[str, Any]) -> None:
+    api.config(mask_config)
 
 

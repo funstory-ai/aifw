@@ -61,7 +61,7 @@ def mask_text():
         
         text = data['text']
         language = data.get('language', 'auto')
-        
+
         if not text.strip():
             return jsonify({"error": "Text cannot be empty"}), 400
         
@@ -78,6 +78,24 @@ def mask_text():
         
     except Exception as e:
         return jsonify({"error": f"Anonymization failed: {str(e)}"}), 500
+
+
+@app.route('/api/config', methods=['POST'])
+def update_config():
+    """API endpoint to update AIFW mask configuration."""
+    try:
+        data = request.get_json() or {}
+        mask_config = data.get('mask_config') or {}
+        if not isinstance(mask_config, dict):
+            return jsonify({"error": "'mask_config' must be an object"}), 400
+
+        if not aifw_api or not hasattr(aifw_api, "config"):
+            return jsonify({"error": "AIFW API not available"}), 500
+
+        aifw_api.config(mask_config)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": f"Config update failed: {str(e)}"}), 500
 
 @app.route('/api/restore', methods=['POST'])
 def restore_text():
