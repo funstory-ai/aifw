@@ -160,9 +160,10 @@ export async function detectLanguage(text) {
 
 // Helpers
 export class MatchedPIISpan {
+  // entity_type is a string tag name (e.g. "EMAIL_ADDRESS"), not the numeric enum id.
   constructor(entity_id, entity_type, matched_start, matched_end, score = 0.0) {
     this.entity_id = entity_id >>> 0;
-    this.entity_type = entity_type >>> 0;
+    this.entity_type = String(entity_type || '');
     this.matched_start = matched_start >>> 0;
     this.matched_end = matched_end >>> 0;
     this.score = Number.isFinite(score) ? Number(score) : 0.0;
@@ -839,13 +840,65 @@ export async function getPiiSpans(inputText, language) {
     const spanBytes = new Uint8Array(wasm.memory.buffer, spansPtr, count * spanSize);
     const res = [];
     const dvSpan = new DataView(spanBytes.buffer, spanBytes.byteOffset, spanBytes.byteLength);
+
+    // Build byte_offset -> UTF-16 character index map for original inputText.
+    const text = String(inputText || '');
+    const byteToChar = [];
+    let bytePos = 0;
+    let iChar = 0;
+    while (iChar < text.length) {
+      byteToChar[bytePos] = iChar;
+      const cp = text.codePointAt(iChar);
+      const cuLen = cp > 0xFFFF ? 2 : 1;
+      let utf8Len = 0;
+      if (cp <= 0x7F) utf8Len = 1;
+      else if (cp <= 0x7FF) utf8Len = 2;
+      else if (cp <= 0xFFFF) utf8Len = 3;
+      else utf8Len = 4;
+      bytePos += utf8Len;
+      iChar += cuLen;
+    }
+    byteToChar[bytePos] = text.length;
+
+    const byteOffToChar = (off) => {
+      if (!Number.isFinite(off) || off <= 0) return 0;
+      const max = byteToChar.length - 1;
+      if (off >= max) return byteToChar[max] ?? text.length;
+      let idx = off;
+      while (idx > 0 && byteToChar[idx] === undefined) {
+        idx -= 1;
+      }
+      return byteToChar[idx] ?? 0;
+    };
+
+    const entityTypeIdToName = (id) => {
+      switch (id >>> 0) {
+        case 1: return 'PHYSICAL_ADDRESS';
+        case 2: return 'EMAIL_ADDRESS';
+        case 3: return 'ORGANIZATION';
+        case 4: return 'USER_MAME';
+        case 5: return 'PHONE_NUMBER';
+        case 6: return 'BANK_NUMBER';
+        case 7: return 'PAYMENT';
+        case 8: return 'VERIFICATION_CODE';
+        case 9: return 'PASSWORD';
+        case 10: return 'RANDOM_SEED';
+        case 11: return 'PRIVATE_KEY';
+        case 12: return 'URL_ADDRESS';
+        case 0: default: return 'NONE';
+      }
+    };
+
     for (let i = 0; i < count; i++) {
       const base = i * spanSize;
       const entity_id = dvSpan.getUint32(base + 0, true);
-      const entity_type = dvSpan.getUint8(base + 4);
-      const matched_start = dvSpan.getUint32(base + 8, true);
-      const matched_end = dvSpan.getUint32(base + 12, true);
+      const entity_type_id = dvSpan.getUint8(base + 4);
+      const b_start = dvSpan.getUint32(base + 8, true);
+      const b_end = dvSpan.getUint32(base + 12, true);
       const score = dvSpan.getFloat32(base + 16, true);
+      const matched_start = byteOffToChar(b_start);
+      const matched_end = byteOffToChar(b_end);
+      const entity_type = entityTypeIdToName(entity_type_id);
       res.push(new MatchedPIISpan(entity_id, entity_type, matched_start, matched_end, score));
     }
     // Free spans buffer allocated by aifw core (MatchedPIISpan, 20 bytes, align=4)

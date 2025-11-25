@@ -60,6 +60,32 @@ class SessionConfig(ctypes.Structure):
     ]
 
 
+# Map core EntityType enum id to string tag name (must stay in sync with core/recog_entity.zig)
+_ENTITY_TYPE_ID_TO_NAME: Dict[int, str] = {
+    0: "NONE",
+    1: "PHYSICAL_ADDRESS",
+    2: "EMAIL_ADDRESS",
+    3: "ORGANIZATION",
+    4: "USER_MAME",
+    5: "PHONE_NUMBER",
+    6: "BANK_NUMBER",
+    7: "PAYMENT",
+    8: "VERIFICATION_CODE",
+    9: "PASSWORD",
+    10: "RANDOM_SEED",
+    11: "PRIVATE_KEY",
+    12: "URL_ADDRESS",
+}
+
+
+def _entity_type_id_to_name(t: Any) -> str:
+    try:
+        iv = int(t)
+    except Exception:
+        return str(t)
+    return _ENTITY_TYPE_ID_TO_NAME.get(iv, f"TYPE_{iv}")
+
+
 # Language/script detection helpers (heuristics + optional OpenCC)
 _SIMPLIFIED_ONLY = set([
     "后", "发", "台", "里", "复", "面", "余", "划", "钟", "观", "厂", "广", "圆", "国", "东", "乐", "云", "内", "两",
@@ -251,8 +277,16 @@ def _select_language(input_text: str, language: Optional[str]) -> str:
 
 @dataclass
 class MatchedPIISpan:
+    """
+    PII span returned by get_pii_spans.
+
+    - entity_id: numeric id assigned by core
+    - entity_type: string tag name (e.g. "EMAIL_ADDRESS"), converted from core enum id
+    - matched_start / matched_end: character indices in the original input text (not UTF-8 bytes)
+    - score: confidence score from 0.0 to 1.0
+    """
     entity_id: int
-    entity_type: int
+    entity_type: str
     matched_start: int
     matched_end: int
     score: float
@@ -427,24 +461,54 @@ def get_pii_spans(input_text: str, language: Optional[str] = None) -> List[Match
         )
         if rc != 0:
             raise RuntimeError(f"get_pii_spans failed rc={rc}")
-        # MatchedPIISpan extern struct layout in core/aifw_core.zig:
+        # MatchedPIISpan extern struct layout in core/aifw_core.zig (UTF-8 byte offsets):
         #   u32 entity_id;
         #   EntityType entity_type; // u8 + 3-byte padding
-        #   u32 matched_start;
-        #   u32 matched_end;
+        #   u32 matched_start;  // byte offset in UTF-8
+        #   u32 matched_end;    // byte offset in UTF-8
         #   f32 score;
         # Total size: 20 bytes, alignment 4.
         span_size = 20
         raw = ctypes.string_at(out_spans, out_count.value * span_size)
+
+        # Build byte_offset -> character index map for the original input_text.
+        utf8 = (input_text or "").encode("utf-8")
+        n_bytes = len(utf8)
+        byte_to_char: List[int] = [0] * (n_bytes + 1)
+        byte_pos = 0
+        for char_index, ch in enumerate(input_text):
+            byte_to_char[byte_pos] = char_index
+            byte_pos += len(ch.encode("utf-8"))
+        # Ensure terminal position maps to len(text)
+        if byte_pos == n_bytes:
+            byte_to_char[n_bytes] = len(input_text)
+        else:
+            byte_to_char[-1] = len(input_text)
+
+        def _byte_off_to_char(off: int) -> int:
+            if off <= 0:
+                return 0
+            if off >= len(byte_to_char):
+                return len(input_text)
+            idx = off
+            # If offset does not land exactly on a recorded boundary,
+            # clamp to the nearest previous character boundary.
+            while idx > 0 and byte_to_char[idx] == 0:
+                idx -= 1
+            return byte_to_char[idx]
+
         out: List[MatchedPIISpan] = []
         for i in range(out_count.value):
             base = i * span_size
             entity_id = int(struct.unpack_from("<I", raw, base + 0)[0])
-            entity_type = int(struct.unpack_from("<B", raw, base + 4)[0])
-            matched_start = int(struct.unpack_from("<I", raw, base + 8)[0])
-            matched_end = int(struct.unpack_from("<I", raw, base + 12)[0])
+            entity_type_id = int(struct.unpack_from("<B", raw, base + 4)[0])
+            b_start = int(struct.unpack_from("<I", raw, base + 8)[0])
+            b_end = int(struct.unpack_from("<I", raw, base + 12)[0])
             score = float(struct.unpack_from("<f", raw, base + 16)[0])
-            out.append(MatchedPIISpan(entity_id, entity_type, matched_start, matched_end, score))
+            start = _byte_off_to_char(b_start)
+            end = _byte_off_to_char(b_end)
+            entity_type_name = _entity_type_id_to_name(entity_type_id)
+            out.append(MatchedPIISpan(entity_id, entity_type_name, start, end, score))
         if int(out_spans.value or 0) and out_count.value:
             _CORE.aifw_free_sized(out_spans, c_size_t(out_count.value * span_size), c_uint8(4))
         return out

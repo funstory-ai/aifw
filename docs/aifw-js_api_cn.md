@@ -399,15 +399,17 @@ console.log(spans);
 // [
 //   MatchedPIISpan {
 //     entity_id: 1,
-//     entity_type: 2,
+//     entity_type: 'EMAIL_ADDRESS',
 //     matched_start: 5,
-//     matched_end: 22
+//     matched_end: 22,
+//     score: 0.95
 //   },
 //   MatchedPIISpan {
 //     entity_id: 2,
-//     entity_type: 3,
+//     entity_type: 'PHONE_NUMBER',
 //     matched_start: 25,
-//     matched_end: 36
+//     matched_end: 36,
+//     score: 0.92
 //   }
 // ]
 
@@ -436,9 +438,10 @@ spans.forEach(span => {
 **属性：**
 
 - `entity_id` (Number): 实体 ID（无符号 32 位整数）
-- `entity_type` (Number): 实体类型（0-255 的整数）
+- `entity_type` (String): 实体类型标签，例如 `"EMAIL_ADDRESS"`、`"PHONE_NUMBER"` 等
 - `matched_start` (Number): 匹配开始位置（字符索引，从 0 开始）
 - `matched_end` (Number): 匹配结束位置（字符索引，不包含）
+- `score` (Number): 识别置信度，范围 [0.0, 1.0]
 
 **示例：**
 
@@ -449,7 +452,7 @@ const spans = await getPiiSpans('Email: user@example.com', 'en');
 const span = spans[0];
 
 console.log(span.entity_id);      // 1
-console.log(span.entity_type);    // 2
+console.log(span.entity_type);    // 'EMAIL_ADDRESS'
 console.log(span.matched_start);  // 7
 console.log(span.matched_end);    // 24
 
