@@ -12,7 +12,6 @@ WORKDIR /opt/aifw
 # Copy requirements first for better cache
 COPY web/requirements.txt /opt/aifw/web/requirements.txt
 COPY cli/python/requirements.txt /opt/aifw/cli/python/requirements.txt
-COPY libs/aifw-py/requirements.txt /opt/aifw/libs/aifw-py/requirements.txt
 
 # System deps (git for fetching model assets) and Python deps
 RUN apt-get update && \
@@ -21,7 +20,6 @@ RUN apt-get update && \
     pip install --upgrade pip && \
     pip install --no-cache-dir -r /opt/aifw/web/requirements.txt && \
     pip install --no-cache-dir -r /opt/aifw/cli/python/requirements.txt && \
-    pip install --no-cache-dir -r /opt/aifw/libs/aifw-py/requirements.txt && \
     python -m pip cache purge || true
 
 # Copy web application files

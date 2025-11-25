@@ -2,3 +2,7 @@ Flask==2.3.3
 requests==2.31.0
 Werkzeug==2.3.7
 pip
+
+# aifw-py runtime dependencies used by web service
+numpy>=1.26.0
+transformers>=4.46.0
