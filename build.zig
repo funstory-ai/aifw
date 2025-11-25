@@ -67,13 +67,14 @@ pub fn build(b: *std.Build) void {
     cargo_wasm.setCwd(b.path("libs/regex"));
 
     // Reduce Rust archive into a single relocatable wasm object to avoid noisy archive members
+    // Always use `zig ar` so we do not depend on a separate llvm-ar installation.
     const extract_cmd = b.addSystemCommand(&[_][]const u8{
         "sh", "-lc",
         "set -e\n" ++
             "cd libs/regex/target/wasm32-unknown-unknown/release\n" ++
             "rm -f aifw_regex_extracted.o\n" ++
-            "MEMBER=$(llvm-ar t libaifw_regex.a | grep -E 'aifw_regex-.*\\.rcgu\\.o' | head -n1)\n" ++
-            "llvm-ar x libaifw_regex.a \"$MEMBER\"\n" ++
+            "MEMBER=$(zig ar t libaifw_regex.a | grep -E 'aifw_regex-.*\\.rcgu\\.o' | head -n1)\n" ++
+            "zig ar x libaifw_regex.a \"$MEMBER\"\n" ++
             "mv \"$MEMBER\" aifw_regex_extracted.o\n",
     });
     extract_cmd.step.dependOn(&cargo_wasm.step);
