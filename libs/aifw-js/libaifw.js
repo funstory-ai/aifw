@@ -160,11 +160,12 @@ export async function detectLanguage(text) {
 
 // Helpers
 export class MatchedPIISpan {
-  constructor(entity_id, entity_type, matched_start, matched_end) {
+  constructor(entity_id, entity_type, matched_start, matched_end, score = 0.0) {
     this.entity_id = entity_id >>> 0;
     this.entity_type = entity_type >>> 0;
     this.matched_start = matched_start >>> 0;
     this.matched_end = matched_end >>> 0;
+    this.score = Number.isFinite(score) ? Number(score) : 0.0;
   }
 }
 
@@ -826,8 +827,14 @@ export async function getPiiSpans(inputText, language) {
     const dv = new DataView(wasm.memory.buffer);
     const spansPtr = dv.getUint32(outSpansPtrPtr, true);
     const count = dv.getUint32(outCountPtr, true);
-    // Layout (extern struct): u32 entity_id, u8 entity_type, 3-byte padding, u32 matched_start, u32 matched_end
-    const spanSize = 4 + 1 + 3 + 4 + 4; // 16 bytes
+    // Layout (extern struct) in core/aifw_core.zig:
+    //   u32 entity_id;
+    //   u8  entity_type; // + 3 bytes padding
+    //   u32 matched_start;
+    //   u32 matched_end;
+    //   f32 score;
+    // Total size: 20 bytes, alignment 4.
+    const spanSize = 4 + 1 + 3 + 4 + 4 + 4; // 20 bytes
     // Read as raw bytes and parse
     const spanBytes = new Uint8Array(wasm.memory.buffer, spansPtr, count * spanSize);
     const res = [];
@@ -838,9 +845,10 @@ export async function getPiiSpans(inputText, language) {
       const entity_type = dvSpan.getUint8(base + 4);
       const matched_start = dvSpan.getUint32(base + 8, true);
       const matched_end = dvSpan.getUint32(base + 12, true);
-      res.push(new MatchedPIISpan(entity_id, entity_type, matched_start, matched_end));
+      const score = dvSpan.getFloat32(base + 16, true);
+      res.push(new MatchedPIISpan(entity_id, entity_type, matched_start, matched_end, score));
     }
-    // Free spans buffer allocated by aifw core (MatchedPIISpan, 16 bytes, align=4)
+    // Free spans buffer allocated by aifw core (MatchedPIISpan, 20 bytes, align=4)
     if (spansPtr && count) freeBuf(spansPtr, count * spanSize, 4);
     return res;
   } finally {

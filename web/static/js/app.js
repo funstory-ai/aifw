@@ -245,14 +245,8 @@ class AIFWApp {
         tbody.innerHTML = '';
         
         entities.forEach(entity => {
-            // Normalize entity_type which can be string (e.g. "EMAIL_ADDRESS")
-            // or numeric enum id from backend (e.g. 2 for EMAIL_ADDRESS)
-            let typeKey = entity.entity_type;
-            if (typeof typeKey !== 'string') {
-                typeKey = this.entityTypeIdToName(typeKey);
-            }
-
             const row = tbody.insertRow();
+            const typeKey = entity.entity_type;
             row.insertCell(0).textContent = this.getEntityTypeName(typeKey);
             row.insertCell(1).textContent = entity.text;
             row.insertCell(2).textContent = `${entity.start}-${entity.end}`;
@@ -268,7 +262,6 @@ class AIFWApp {
     displayPlaceholders(placeholders) {
         const tbody = document.getElementById('placeholdersTable');
         tbody.innerHTML = '';
-        console.log('[AIFW Web] displayPlaceholders input:', placeholders);
         Object.entries(placeholders).forEach(([placeholder, original]) => {
             const row = tbody.insertRow();
             row.insertCell(0).textContent = placeholder;
@@ -276,40 +269,21 @@ class AIFWApp {
         });
     }
 
-    // Map backend EntityType enum id to string name used by UI
-    entityTypeIdToName(id) {
-        const map = {
-            0: 'NONE',
-            1: 'PHYSICAL_ADDRESS',
-            2: 'EMAIL_ADDRESS',
-            3: 'ORGANIZATION',
-            4: 'USER_MAME',
-            5: 'PHONE_NUMBER',
-            6: 'BANK_NUMBER',
-            7: 'PAYMENT',
-            8: 'VERIFICATION_CODE',
-            9: 'PASSWORD',
-            10: 'RANDOM_SEED',
-            11: 'PRIVATE_KEY',
-            12: 'URL_ADDRESS',
-        };
-        return map[id] || `TYPE_${id}`;
-    }
-
     getEntityTypeName(type) {
         const typeMap = {
+            'PHYSICAL_ADDRESS': '地址',
             'EMAIL_ADDRESS': '邮箱地址',
+            'ORGANIZATION': '组织',
+            'USER_MAME': '人名',
             'PHONE_NUMBER': '电话号码',
-            'CREDIT_CARD': '信用卡号',
-            'PERSON': '人名',
-            'LOCATION': '地址',
-            'IBAN_CODE': '银行账户',
+            'BANK_NUMBER': '银行账户',
+            'PAYMENT': '支付账号',
+            'VERIFICATION_CODE': '验证码',
+            'PASSWORD': '密码',
+            'RANDOM_SEED': '随机种子',
+            'PRIVATE_KEY': '私钥',
+            'URL_ADDRESS': '网址',
             'IP_ADDRESS': 'IP地址',
-            'URL': '网址',
-            'DATE_TIME': '日期时间',
-            'US_SSN': '社会安全号',
-            'US_PASSPORT': '护照号',
-            'US_DRIVER_LICENSE': '驾驶证号'
         };
         return typeMap[type] || type;
     }

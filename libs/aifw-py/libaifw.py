@@ -255,6 +255,7 @@ class MatchedPIISpan:
     entity_type: int
     matched_start: int
     matched_end: int
+    score: float
 
 
 def _session_handle_is_valid() -> bool:
@@ -414,7 +415,7 @@ def get_pii_spans(input_text: str, language: Optional[str] = None) -> List[Match
         in_c = ctypes.create_string_buffer((input_text or "").encode("utf-8") + b"\x00")
         out_spans = c_void_p()
         out_count = c_uint32(0)
-        lang_enum = _language_enum_for_spans(lang_to_use)
+        lang_enum = _language_enum(lang_to_use)
         rc = _CORE.aifw_session_get_pii_spans(
             _SESSION_HANDLE,
             ctypes.cast(in_c, c_char_p),
@@ -426,7 +427,14 @@ def get_pii_spans(input_text: str, language: Optional[str] = None) -> List[Match
         )
         if rc != 0:
             raise RuntimeError(f"get_pii_spans failed rc={rc}")
-        span_size = 16
+        # MatchedPIISpan extern struct layout in core/aifw_core.zig:
+        #   u32 entity_id;
+        #   EntityType entity_type; // u8 + 3-byte padding
+        #   u32 matched_start;
+        #   u32 matched_end;
+        #   f32 score;
+        # Total size: 20 bytes, alignment 4.
+        span_size = 20
         raw = ctypes.string_at(out_spans, out_count.value * span_size)
         out: List[MatchedPIISpan] = []
         for i in range(out_count.value):
@@ -435,7 +443,8 @@ def get_pii_spans(input_text: str, language: Optional[str] = None) -> List[Match
             entity_type = int(struct.unpack_from("<B", raw, base + 4)[0])
             matched_start = int(struct.unpack_from("<I", raw, base + 8)[0])
             matched_end = int(struct.unpack_from("<I", raw, base + 12)[0])
-            out.append(MatchedPIISpan(entity_id, entity_type, matched_start, matched_end))
+            score = float(struct.unpack_from("<f", raw, base + 16)[0])
+            out.append(MatchedPIISpan(entity_id, entity_type, matched_start, matched_end, score))
         if int(out_spans.value or 0) and out_count.value:
             _CORE.aifw_free_sized(out_spans, c_size_t(out_count.value * span_size), c_uint8(4))
         return out
@@ -498,15 +507,6 @@ def _language_enum(language: str) -> int:
         return 15
     if l.startswith("pt"):
         return 16
-    return 0
-
-
-def _language_enum_for_spans(language: str) -> int:
-    l = (language or "").lower()
-    if l.startswith("zh"):
-        return 1
-    if l.startswith("en"):
-        return 2
     return 0
 
 

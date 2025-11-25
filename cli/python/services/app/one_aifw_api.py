@@ -9,6 +9,32 @@ import importlib.util
 from .llm_client import LLMClient, load_llm_api_config
 
 
+# Map core EntityType enum id to string tag name (must stay in sync with core/recog_entity.zig)
+_ENTITY_TYPE_ID_TO_NAME = {
+    0: "NONE",
+    1: "PHYSICAL_ADDRESS",
+    2: "EMAIL_ADDRESS",
+    3: "ORGANIZATION",
+    4: "USER_MAME",
+    5: "PHONE_NUMBER",
+    6: "BANK_NUMBER",
+    7: "PAYMENT",
+    8: "VERIFICATION_CODE",
+    9: "PASSWORD",
+    10: "RANDOM_SEED",
+    11: "PRIVATE_KEY",
+    12: "URL_ADDRESS",
+}
+
+
+def _entity_type_to_name(t: int) -> str:
+    try:
+        iv = int(t)
+    except Exception:
+        return str(t)
+    return _ENTITY_TYPE_ID_TO_NAME.get(iv, f"TYPE_{iv}")
+
+
 def _load_aifw_py():
     """
     Load libs/aifw-py as package 'aifw_py' so that we can import aifw_py.libaifw.
@@ -156,9 +182,11 @@ class OneAIFWAPI:
             results.append(
                 {
                     "entity_id": int(getattr(s, "entity_id", 0)),
-                    "entity_type": int(getattr(s, "entity_type", 0)),
+                    # Expose entity_type as string tag (e.g. "EMAIL_ADDRESS")
+                    "entity_type": _entity_type_to_name(getattr(s, "entity_type", 0)),
                     "start": start,
                     "end": end,
+                    "score": float(getattr(s, "score", 0.0)),
                     "text": frag,
                 }
             )

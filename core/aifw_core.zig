@@ -97,6 +97,9 @@ pub const MatchedPIISpan = extern struct {
     /// The matched text is the substring of the original text[matched_start..matched_end].
     matched_start: u32,
     matched_end: u32,
+
+    /// The confidence score of the matched text, it's from 0.0 to 1.0.
+    score: f32,
 };
 
 pub const PlaceholderMatchedPair = struct {
@@ -117,7 +120,7 @@ pub const MaskMetaData = struct {
     referenced_text: []const u8,
 
     /// The PII spans slice, every PII span is recognized by RegexRecognizer or NerRecognizer.
-    /// The matched_start and matched_end is a index in original_text
+    /// The matched_start and matched_end is a index in referenced_text.
     matched_pii_spans: []const MatchedPIISpan,
 
     /// The matched_pii_spans is owned by the MaskMetaData, if is_owned_pii_spans is true,
@@ -187,6 +190,7 @@ fn serialize_mask_meta_data(allocator: std.mem.Allocator, mask_meta_data: MaskMe
             .entity_type = span.entity_type,
             .matched_start = @intCast(cursor),
             .matched_end = @intCast(cursor + span_text_len),
+            .score = span.score,
         };
         cursor += span_text_len;
     }
@@ -590,6 +594,7 @@ pub const MaskPipeline = struct {
                     .entity_type = span.entity_type,
                     .matched_start = span_start,
                     .matched_end = span_end,
+                    .score = span.score,
                 });
             } else {
                 // Masking disabled for this entity type; keep original text and do not record metadata.
@@ -1023,9 +1028,9 @@ test "session get PII spans" {
         .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
     };
     const expected_pii_spans = &[_]MatchedPIISpan{
-        .{ .entity_id = 1, .entity_type = .EMAIL_ADDRESS, .matched_start = 12, .matched_end = 25 },
-        .{ .entity_id = 2, .entity_type = .URL_ADDRESS, .matched_start = 36, .matched_end = 56 },
-        .{ .entity_id = 3, .entity_type = .USER_MAME, .matched_start = 68, .matched_end = 77 },
+        .{ .entity_id = 1, .entity_type = .EMAIL_ADDRESS, .matched_start = 12, .matched_end = 25, .score = 0.9 },
+        .{ .entity_id = 2, .entity_type = .URL_ADDRESS, .matched_start = 36, .matched_end = 56, .score = 0.8 },
+        .{ .entity_id = 3, .entity_type = .USER_MAME, .matched_start = 68, .matched_end = 77, .score = 0.98 },
     };
     const pii_spans = try session.get_pii_spans(input, &ner_entities, .en);
     defer allocator.free(pii_spans);
