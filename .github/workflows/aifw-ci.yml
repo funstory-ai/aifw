@@ -21,11 +21,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r py-origin/services/requirements.txt
-          pip install -r py-origin/cli/requirements.txt
-          python -m spacy download en_core_web_sm
-          python -m spacy download xx_ent_wiki_sm
-          python -m spacy download zh_core_web_sm
+          pip install -r cli/python/requirements.txt
+          pip install -r cli/python/services/requirements.txt
+          pip install -r libs/aifw-py/requirements.txt
 
       - name: Start fake LLM (echo) in background
         run: |
@@ -48,17 +46,17 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          cd py-origin
+          cd cli/python
           PROMPT="请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
           # direct_call (in-process)
-          python -m aifw direct_call --api-key-file $RUNNER_TEMP/echo-apikey.json "My email is test@example.com"
+          python aifw.py direct_call --api-key-file $RUNNER_TEMP/echo-apikey.json "My email is test@example.com"
 
           # launch HTTP (daemonized), call, then stop
-          python -m aifw launch --api-key-file $RUNNER_TEMP/echo-apikey.json --log-dest stdout || (cat ~/.aifw/aifw-server-*.log || true; exit 1)
+          python aifw.py launch --api-key-file $RUNNER_TEMP/echo-apikey.json --log-dest stdout || (cat ~/.aifw/aifw-server-*.log || true; exit 1)
           # wait until HTTP server is ready
           for i in $(seq 1 40); do curl -sf http://127.0.0.1:8844/api/health && break || sleep 0.5; done
-          python -m aifw call --api-key-file $RUNNER_TEMP/echo-apikey.json "$PROMPT"
-          python -m aifw stop || true
+          python aifw.py call --api-key-file $RUNNER_TEMP/echo-apikey.json "$PROMPT"
+          python aifw.py stop || true
 
       - name: Teardown fake LLM
         if: always()

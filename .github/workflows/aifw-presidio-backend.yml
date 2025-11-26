@@ -1,8 +1,6 @@
-name: aifw-release
+name: aifw-presidio-backend
 
 on:
-  release:
-    types: [created]
   workflow_dispatch:
     inputs:
       build_docker:
@@ -136,9 +134,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: cli/python/Dockerfile
+          file: py-origin/Dockerfile
           push: true
           platforms: linux/amd64
+          build-args: |
+            SPACY_PROFILE=minimal
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: ${{ steps.meta_amd64.outputs.tags }}
@@ -236,9 +236,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: cli/python/Dockerfile
+          file: py-origin/Dockerfile
           push: true
           platforms: linux/arm64
+          build-args: |
+            SPACY_PROFILE=minimal
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: ${{ steps.meta_arm64.outputs.tags }}
@@ -288,12 +290,7 @@ jobs:
 
   docker-merge:
     if: |
-      (github.event_name == 'workflow_dispatch' && inputs.build_docker == true) ||
-      (github.event_name == 'release' && (
-        contains(github.event.release.body, 'build_docker=true') ||
-        contains(github.event.release.body, 'docker: true') ||
-        contains(github.event.release.name, '[docker]')
-      ))
+      (github.event_name == 'workflow_dispatch' && inputs.build_docker == true)
     runs-on: ubuntu-latest
     needs: [docker-amd64, docker-arm64]
     permissions:
@@ -386,7 +383,7 @@ jobs:
           }
           JSON
 
-      - name: Normal test container (launch → call → stop)
+      - name: Smoke test container (launch → call → stop)
         run: |
           PROMPT="请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
           # Map host.docker.internal to host gateway so the container can reach the fake LLM on the runner
@@ -396,12 +393,12 @@ jobs:
             -v $RUNNER_TEMP/echo-apikey-docker.json:/data/aifw/echo.json \
             ghcr.io/${{ github.repository_owner }}/oneaifw:latest \
             sh -lc '
-              aifw launch --log-dest stdout &
+              python -m aifw launch &
               for i in $(seq 1 40); do curl -sf http://127.0.0.1:8844/api/health && break || sleep 0.5; done
-              aifw call "$PROMPT"
-              aifw stop'
+              python -m aifw call "$PROMPT"
+              python -m aifw stop'
 
-      - name: Normal test container (direct_call)
+      - name: Smoke test container (direct_call)
         run: |
           PROMPT="请把如下文本翻译为中文: My email address is test@example.com, and my phone number is 18744325579."
           # Map host.docker.internal to host gateway so the container can reach the fake LLM on the runner
@@ -410,7 +407,7 @@ jobs:
             -e AIFW_API_KEY_FILE=/data/aifw/echo.json \
             -v $RUNNER_TEMP/echo-apikey-docker.json:/data/aifw/echo.json \
             ghcr.io/${{ github.repository_owner }}/oneaifw:latest \
-            sh -lc 'aifw direct_call "$PROMPT"'
+            sh -lc 'python -m aifw direct_call "$PROMPT"'
 
       - name: Teardown fake LLM
         if: always()

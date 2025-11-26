@@ -2,10 +2,30 @@
 """OneAIFW CLI - direct (in-process) and HTTP modes.
 
 Usage examples:
-  python -m cli.oneaifw_cli anonymize --text "My email is test@example.com"
-  python -m cli.oneaifw_cli restore --text "Hello __PII_EMAIL_ADDRESS_abcd1234__" \
-      --placeholders '{"__PII_EMAIL_ADDRESS_abcd1234__":"test@example.com"}'
-  echo "My phone is 13800001111" | python -m cli.oneaifw_cli anonymize -
+
+  # In-process call (no HTTP server), using an OpenAI-compatible echo LLM:
+  python aifw.py direct_call \\
+    --api-key-file /path/to/echo-apikey.json \\
+    "Please translate this text to Chinese: My email is test@example.com"
+
+  # Start HTTP server in background, call it, then stop:
+  python aifw.py launch \\
+    --api-key-file /path/to/echo-apikey.json \\
+    --log-dest stdout
+
+  # From another shell / process:
+  python aifw.py call \\
+    --api-key-file /path/to/echo-apikey.json \\
+    "Please summarize this paragraph..."
+
+  # Stop the HTTP server (default port 8844):
+  python aifw.py stop
+
+  # Mask then restore a single text via HTTP APIs:
+  echo "My phone is 13800001111" | python aifw.py mask_restore -
+
+  # Batch mask/restore multiple texts:
+  python aifw.py mask_restore_batch "Text 1" "Text 2"
 """
 
 import sys
@@ -388,7 +408,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         log_config_arg = f" --log-config {shlex.quote(logcfg_path)}"
     except Exception:
         log_config_arg = ""
-    cmd = f"{sys.executable} -m uvicorn services.app.main:app --host 127.0.0.1 --port {port} --log-level {log_level}{log_config_arg}"
+    cmd = f"{sys.executable} -m uvicorn services.app.main:app --host 0.0.0.0 --port {port} --log-level {log_level}{log_config_arg}"
     log_dest = _get_effective_with_env(getattr(args, 'log_dest', None), ['AIFW_LOG_DEST'], cfg.get('log_dest'), 'file')
     # Prepare server-side env for monthly cleanup BEFORE launch
     base_log = _get_effective_with_env(getattr(args, 'log_file', None), ['AIFW_LOG_FILE'], cfg.get('log_file'), os.path.join(work_dir, f"aifw-server-{port}.log"))
