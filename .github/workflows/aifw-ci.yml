@@ -18,6 +18,20 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Setup Rust (stable + wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          use-cache: true
+
+      - name: Build Zig core
+        run: zig build
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

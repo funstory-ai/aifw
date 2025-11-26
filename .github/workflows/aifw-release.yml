@@ -109,6 +109,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Rust (stable + wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          use-cache: true
+
+      - name: Build Zig core native library (amd64)
+        run: zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-gnu -Dcpu=haswell
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -208,6 +222,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Rust (stable + wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+          use-cache: true
+
+      - name: Build Zig core native library (arm64)
+        run: zig build -Doptimize=ReleaseFast
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
