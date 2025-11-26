@@ -13,6 +13,8 @@ class AIFWApp {
         this.bindEvents();
         this.checkHealth();
         this.loadGitHubStars();
+        // Apply default mask configuration on load
+        this.updateMaskConfig();
     }
 
     bindEvents() {
@@ -21,11 +23,11 @@ class AIFWApp {
         document.getElementById('restoreBtn').addEventListener('click', () => this.restoreText());
         document.getElementById('clearBtn').addEventListener('click', () => this.clearAll());
         document.getElementById('startAnimation').addEventListener('click', () => this.startWorkflowAnimation());
-        // Update mask configuration immediately when user changes checkbox
-        const addrEl = document.getElementById('maskAddressCheckbox');
-        if (addrEl) {
-            addrEl.addEventListener('change', () => this.updateMaskConfig());
-        }
+        // Update mask configuration immediately when user changes any checkbox
+        const maskCheckboxes = document.querySelectorAll('.mask-checkbox');
+        maskCheckboxes.forEach((el) => {
+            el.addEventListener('change', () => this.updateMaskConfig());
+        });
     }
 
     async checkHealth() {
@@ -64,13 +66,26 @@ class AIFWApp {
     }
 
     // Collect mask configuration from UI checkboxes.
-    // Currently only PHYSICAL_ADDRESS is configurable; other types are always protected.
     getMaskConfigFromUI() {
         const cfg = {};
-        const addrEl = document.getElementById('maskAddressCheckbox');
-        if (addrEl) {
-            cfg.maskAddress = !!addrEl.checked;
-        }
+        const byId = (id) => document.getElementById(id);
+        const get = (id, def = false) => {
+            const el = byId(id);
+            return el ? !!el.checked : def;
+        };
+        // Map UI checkboxes to backend mask_config keys
+        cfg.maskAddress = get('maskAddressCheckbox', false);
+        cfg.maskEmail = get('maskEmailCheckbox', true);
+        cfg.maskOrganization = get('maskOrganizationCheckbox', false);
+        cfg.maskUserName = get('maskUserNameCheckbox', false);
+        cfg.maskPhoneNumber = get('maskPhoneCheckbox', true);
+        cfg.maskBankNumber = get('maskBankCheckbox', true);
+        cfg.maskPayment = get('maskPaymentCheckbox', true);
+        cfg.maskVerificationCode = get('maskVcodeCheckbox', true);
+        cfg.maskPassword = get('maskPasswordCheckbox', true);
+        cfg.maskRandomSeed = get('maskRandomSeedCheckbox', true);
+        cfg.maskPrivateKey = get('maskPrivateKeyCheckbox', true);
+        cfg.maskUrl = get('maskUrlCheckbox', false);
         return cfg;
     }
 

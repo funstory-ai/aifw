@@ -96,64 +96,91 @@
                             <div class="col-md-6">
                                 <h5><i class="fas fa-lock text-success me-2"></i>保护内容</h5>
                                 <p class="mb-2 text-muted" style="font-size: 0.9rem;">
-                                    勾选表示将该类型信息进行匿名化保护。灰色且已勾选的项目为系统默认强制保护，当前仅
-                                    <strong>物理地址</strong> 支持按需开启或关闭保护。
+                                    勾选表示将该类型信息进行匿名化保护。所有类型均可选择。默认未勾选：<strong>物理地址</strong>、<strong>姓名/用户名</strong>、<strong>公司/组织名</strong>、<strong>URL 地址</strong>；其余默认勾选。
                                 </p>
                                 <div class="list-unstyled">
-                                    <!-- 可选项：物理地址 -->
+                                    <!-- 物理地址（默认未勾选） -->
                                     <div class="form-check mb-1">
-                                        <input class="form-check-input" type="checkbox" id="maskAddressCheckbox">
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskAddressCheckbox">
                                         <label class="form-check-label" for="maskAddressCheckbox">
-                                            <i class="fas fa-map-marker-alt text-success me-2"></i>物理地址（可选）
+                                            <i class="fas fa-map-marker-alt text-success me-2"></i>物理地址
                                         </label>
                                     </div>
-                                    <!-- 以下为默认始终保护，不可修改 -->
+                                    <!-- 邮箱地址（默认勾选） -->
                                     <div class="form-check mb-1">
-                                        <input class="form-check-input" type="checkbox" id="maskEmailCheckbox" checked disabled>
-                                        <label class="form-check-label text-muted" for="maskEmailCheckbox">
-                                            <i class="fas fa-envelope text-success me-2"></i>邮箱地址（始终保护）
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskEmailCheckbox" checked>
+                                        <label class="form-check-label" for="maskEmailCheckbox">
+                                            <i class="fas fa-envelope text-success me-2"></i>邮箱地址
                                         </label>
                                     </div>
+                                    <!-- 姓名 / 用户名（默认未勾选） -->
                                     <div class="form-check mb-1">
-                                        <input class="form-check-input" type="checkbox" id="maskUserNameCheckbox" checked disabled>
-                                        <label class="form-check-label text-muted" for="maskUserNameCheckbox">
-                                            <i class="fas fa-user text-success me-2"></i>姓名 / 用户名（始终保护）
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskUserNameCheckbox">
+                                        <label class="form-check-label" for="maskUserNameCheckbox">
+                                            <i class="fas fa-user text-success me-2"></i>姓名 / 用户名
                                         </label>
                                     </div>
+                                    <!-- 公司 / 组织名（默认未勾选） -->
                                     <div class="form-check mb-1">
-                                        <input class="form-check-input" type="checkbox" id="maskPhoneCheckbox" checked disabled>
-                                        <label class="form-check-label text-muted" for="maskPhoneCheckbox">
-                                            <i class="fas fa-phone text-success me-2"></i>电话号码（始终保护）
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskOrganizationCheckbox">
+                                        <label class="form-check-label" for="maskOrganizationCheckbox">
+                                            <i class="fas fa-building text-success me-2"></i>公司 / 组织名
                                         </label>
                                     </div>
+                                    <!-- 电话号码（默认勾选） -->
                                     <div class="form-check mb-1">
-                                        <input class="form-check-input" type="checkbox" id="maskBankCheckbox" checked disabled>
-                                        <label class="form-check-label text-muted" for="maskBankCheckbox">
-                                            <i class="fas fa-credit-card text-success me-2"></i>银行账户 / 卡号（始终保护）
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskPhoneCheckbox" checked>
+                                        <label class="form-check-label" for="maskPhoneCheckbox">
+                                            <i class="fas fa-phone text-success me-2"></i>电话号码
                                         </label>
                                     </div>
+                                    <!-- 银行账户 / 卡号（默认勾选） -->
                                     <div class="form-check mb-1">
-                                        <input class="form-check-input" type="checkbox" id="maskPaymentCheckbox" checked disabled>
-                                        <label class="form-check-label text-muted" for="maskPaymentCheckbox">
-                                            <i class="fas fa-wallet text-success me-2"></i>支付信息（始终保护）
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskBankCheckbox" checked>
+                                        <label class="form-check-label" for="maskBankCheckbox">
+                                            <i class="fas fa-credit-card text-success me-2"></i>银行账户 / 卡号
                                         </label>
                                     </div>
+                                    <!-- 支付信息（默认勾选） -->
                                     <div class="form-check mb-1">
-                                        <input class="form-check-input" type="checkbox" id="maskVcodeCheckbox" checked disabled>
-                                        <label class="form-check-label text-muted" for="maskVcodeCheckbox">
-                                            <i class="fas fa-shield-alt text-success me-2"></i>验证码（始终保护）
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskPaymentCheckbox" checked>
+                                        <label class="form-check-label" for="maskPaymentCheckbox">
+                                            <i class="fas fa-wallet text-success me-2"></i>支付信息
                                         </label>
                                     </div>
+                                    <!-- 验证码（默认勾选） -->
                                     <div class="form-check mb-1">
-                                        <input class="form-check-input" type="checkbox" id="maskPasswordCheckbox" checked disabled>
-                                        <label class="form-check-label text-muted" for="maskPasswordCheckbox">
-                                            <i class="fas fa-key text-success me-2"></i>密码（始终保护）
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskVcodeCheckbox" checked>
+                                        <label class="form-check-label" for="maskVcodeCheckbox">
+                                            <i class="fas fa-shield-alt text-success me-2"></i>验证码
                                         </label>
                                     </div>
+                                    <!-- 密码（默认勾选） -->
                                     <div class="form-check mb-1">
-                                        <input class="form-check-input" type="checkbox" id="maskPrivateKeyCheckbox" checked disabled>
-                                        <label class="form-check-label text-muted" for="maskPrivateKeyCheckbox">
-                                            <i class="fas fa-user-secret text-success me-2"></i>私钥（始终保护）
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskPasswordCheckbox" checked>
+                                        <label class="form-check-label" for="maskPasswordCheckbox">
+                                            <i class="fas fa-key text-success me-2"></i>密码
+                                        </label>
+                                    </div>
+                                    <!-- 随机种子（默认勾选） -->
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskRandomSeedCheckbox" checked>
+                                        <label class="form-check-label" for="maskRandomSeedCheckbox">
+                                            <i class="fas fa-dice text-success me-2"></i>随机种子
+                                        </label>
+                                    </div>
+                                    <!-- 私钥（默认勾选） -->
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskPrivateKeyCheckbox" checked>
+                                        <label class="form-check-label" for="maskPrivateKeyCheckbox">
+                                            <i class="fas fa-user-secret text-success me-2"></i>私钥
+                                        </label>
+                                    </div>
+                                    <!-- URL 地址（默认未勾选） -->
+                                    <div class="form-check mb-1">
+                                        <input class="form-check-input mask-checkbox" type="checkbox" id="maskUrlCheckbox">
+                                        <label class="form-check-label" for="maskUrlCheckbox">
+                                            <i class="fas fa-link text-success me-2"></i>URL 地址
                                         </label>
                                     </div>
                                 </div>
