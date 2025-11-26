@@ -30,7 +30,7 @@ jobs:
           use-cache: true
 
       - name: Build Zig core
-        run: zig build
+        run: zig build -Doptimize=ReleaseFast
 
       - name: Install dependencies
         run: |
