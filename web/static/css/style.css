@@ -25,7 +25,7 @@ body {
     word-wrap: break-word;
     background-color: #f8f9fa;
     border: 1px solid #dee2e6;
-    text-align: left;
+    text-align: left !important;
 }
 
 .btn {
