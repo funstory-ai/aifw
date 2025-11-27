@@ -54,13 +54,58 @@ if (!batchEl && textEl && textEl.parentElement) {
   batchEl = input;
 }
 
+// Create mask-config checkboxes above textarea (to the right of language/batch rows)
+const maskCheckboxes = {};
+if (textEl && textEl.parentElement) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  const title = document.createElement('span');
+  title.textContent = 'Mask types:';
+  row.appendChild(title);
+  const defs = [
+    { key: 'maskAddress', id: 'maskAddress', label: 'Address', checked: true },
+    { key: 'maskEmail', id: 'maskEmail', label: 'Email', checked: true },
+    { key: 'maskOrganization', id: 'maskOrganization', label: 'Organization', checked: true },
+    { key: 'maskUserName', id: 'maskUserName', label: 'User name', checked: true },
+    { key: 'maskPhoneNumber', id: 'maskPhoneNumber', label: 'Phone', checked: true },
+    { key: 'maskBankNumber', id: 'maskBankNumber', label: 'Bank', checked: true },
+    { key: 'maskPayment', id: 'maskPayment', label: 'Payment', checked: true },
+    { key: 'maskVerificationCode', id: 'maskVerificationCode', label: 'Verification code', checked: true },
+    { key: 'maskPassword', id: 'maskPassword', label: 'Password', checked: true },
+    { key: 'maskRandomSeed', id: 'maskRandomSeed', label: 'Random seed', checked: true },
+    { key: 'maskPrivateKey', id: 'maskPrivateKey', label: 'Private key', checked: true },
+    { key: 'maskUrl', id: 'maskUrl', label: 'URL', checked: true },
+  ];
+  for (const def of defs) {
+    const label = document.createElement('label');
+    label.style.marginLeft = '12px';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.id = def.id;
+    input.checked = def.checked;
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(' ' + def.label));
+    row.appendChild(label);
+    maskCheckboxes[def.key] = input;
+  }
+  textEl.parentElement.parentElement?.insertBefore(row, textEl.parentElement);
+}
+
+function getMaskConfigFromUI() {
+  const cfg = {};
+  for (const [key, el] of Object.entries(maskCheckboxes)) {
+    cfg[key] = !!el.checked;
+  }
+  return cfg;
+}
+
 let aifw; // wrapper lib
 
 async function main() {
   statusEl.textContent = 'Initializing AIFW...';
   aifw = await import('@oneaifw/aifw-js');
   // await aifw.init({ wasmBase: './wasm/' });
-  await aifw.init();
+  await aifw.init({ maskConfig: getMaskConfigFromUI() });
   statusEl.textContent = 'AIFW initialized.';
 
   // graceful shutdown on page exit (bfcache + unload)
@@ -72,6 +117,15 @@ async function main() {
   }
   window.addEventListener('pagehide', shutdownOnce, { once: true });
   window.addEventListener('beforeunload', shutdownOnce, { once: true });
+
+  // When user toggles mask checkboxes, update config at runtime
+  for (const el of Object.values(maskCheckboxes)) {
+    el.addEventListener('change', () => {
+      if (!aifw || typeof aifw.config !== 'function') return;
+      const cfg = getMaskConfigFromUI();
+      aifw.config(cfg).catch((e) => console.warn('[webapp] config failed', e));
+    });
+  }
 
   runBtn.addEventListener('click', async () => {
     try {

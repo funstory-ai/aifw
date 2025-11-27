@@ -57,28 +57,6 @@ class OneAIFWAPI:
         self._llm = None
 
     # Public API
-    def mask_text(self, text: str, language: Optional[str] = None) -> Dict[str, Any]:
-        """Mask PII in text and return masked text plus metadata for restoration.
-
-        maskMeta is a base64 string of binary maskMeta bytes produced by aifw core.
-        """
-        # Let aifw-py handle language auto-detection if language is None or "auto"
-        lang = None if (language is None or language == "" or language == "auto") else language
-        masked_text, meta_bytes = self._aifw.mask_text(text, lang)
-        mask_meta_b64 = base64.b64encode(meta_bytes).decode("ascii")
-        return {"text": masked_text, "maskMeta": mask_meta_b64}
-
-    def restore_text(self, text: str, mask_meta: Any) -> str:
-        """Restore masked text using base64-encoded binary maskMeta produced by aifw core."""
-        try:
-            if isinstance(mask_meta, (bytes, bytearray)):
-                meta_bytes = bytes(mask_meta)
-            else:
-                meta_bytes = base64.b64decode(str(mask_meta), validate=False)
-        except Exception:
-            meta_bytes = b""
-        return self._aifw.restore_text(text, meta_bytes)
-
     def config(self, mask_config: Dict[str, Any]) -> None:
         """
         Configure AIFW core session (e.g. which entity types are masked).
@@ -109,6 +87,28 @@ class OneAIFWAPI:
         except Exception:
             # Configuration errors should not crash callers; keep previous config.
             return
+
+    def mask_text(self, text: str, language: Optional[str] = None) -> Dict[str, Any]:
+        """Mask PII in text and return masked text plus metadata for restoration.
+
+        maskMeta is a base64 string of binary maskMeta bytes produced by aifw core.
+        """
+        # Let aifw-py handle language auto-detection if language is None or "auto"
+        lang = None if (language is None or language == "" or language == "auto") else language
+        masked_text, meta_bytes = self._aifw.mask_text(text, lang)
+        mask_meta_b64 = base64.b64encode(meta_bytes).decode("ascii")
+        return {"text": masked_text, "maskMeta": mask_meta_b64}
+
+    def restore_text(self, text: str, mask_meta: Any) -> str:
+        """Restore masked text using base64-encoded binary maskMeta produced by aifw core."""
+        try:
+            if isinstance(mask_meta, (bytes, bytearray)):
+                meta_bytes = bytes(mask_meta)
+            else:
+                meta_bytes = base64.b64decode(str(mask_meta), validate=False)
+        except Exception:
+            meta_bytes = b""
+        return self._aifw.restore_text(text, meta_bytes)
 
     def get_pii_entities(self, text: str, language: Optional[str] = None) -> List[Dict[str, Any]]:
         """

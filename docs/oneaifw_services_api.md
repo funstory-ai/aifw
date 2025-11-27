@@ -55,6 +55,47 @@ response:
 {"output":{"text":"我的电子邮件地址是 test@example.com，我的电话号码是 18744325579。"},"error":null}
 ```
 
+## Mask Configuration (runtime)
+
+- Method/Path: POST `/api/config`
+- Content-Type: `application/json`
+- Headers: `Authorization: <your-key>` (when the server requires auth)
+- Purpose: update the in-memory mask configuration of the running service without restarting it.
+- Request body:
+  - `maskConfig` (object, required): per-entity mask switches. Supported keys:
+    - `maskAddress` (bool): physical address, default is false
+    - `maskEmail` (bool): email address, default is true
+    - `maskOrganization` (bool): organization / company name, default is true
+    - `maskUserName` (bool): personal name / username, default is true
+    - `maskPhoneNumber` (bool): phone number, default is true
+    - `maskBankNumber` (bool): bank account number, default is true
+    - `maskPayment` (bool): payment-related identifiers, default is true
+    - `maskVerificationCode` (bool): verification / one-time codes, default is true
+    - `maskPassword` (bool): passwords, default is true
+    - `maskRandomSeed` (bool): random seeds / initialization values, default is true
+    - `maskPrivateKey` (bool): private keys / secrets, default is true
+    - `maskUrl` (bool): URLs, default is true
+    - `maskAll` (bool): enable/disable all of the above, no default value
+- Response (JSON):
+```json
+{ "output": { "status": "ok" }, "error": null }
+```
+
+Example (curl):
+```bash
+curl -s -X POST http://127.0.0.1:8844/api/config \
+  -H 'Content-Type: application/json' \
+  # -H 'Authorization: Bearer <your-key>' \
+  -d '{
+    "maskConfig": {
+      "maskEmail": true,
+      "maskPhoneNumber": true,
+      "maskUserName": true,
+      "maskAddress": false,
+    }
+  }'
+```
+
 ## Mask and Restore
 
 These two API interface are used together to mask a piece of text, process the masked text (e.g., translation), and then restore it. They must be used as a pair: every mask call requires a corresponding restore call, otherwise memory may leak. You can call the mask interface in batches, process all masked texts, and then call the restore interface in batches with the matching metadata.

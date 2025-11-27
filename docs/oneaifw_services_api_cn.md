@@ -55,6 +55,47 @@ curl -s -X POST http://127.0.0.1:8844/api/call \
 {"output":{"text":"我的电子邮件地址是 test@example.com，我的电话号码是 18744325579。"},"error":null}
 ```
 
+## 掩码配置（运行时 config 接口）
+
+- 方法/路径：POST `/api/config`
+- Content-Type：`application/json`
+- 请求头：`Authorization: <your-key>`（若服务端启用鉴权）
+- 用途：**在不重启服务的情况下，动态更新当前会话的敏感信息掩码策略**。
+- 请求体字段：
+  - `maskConfig` (object, 必填)：各类敏感信息的掩码开关，支持的字段包括：
+    - `maskAddress` (bool)：物理地址，缺省值是false
+    - `maskEmail` (bool)：邮箱地址，缺省值是true
+    - `maskOrganization` (bool)：组织 / 公司名称，缺省值是true
+    - `maskUserName` (bool)：人名 / 用户名，缺省值是true
+    - `maskPhoneNumber` (bool)：电话号码，缺省值是true
+    - `maskBankNumber` (bool)：银行卡号 / 银行账号，缺省值是true
+    - `maskPayment` (bool)：支付相关标识，缺省值是true
+    - `maskVerificationCode` (bool)：验证码 / 一次性代码，缺省值是true
+    - `maskPassword` (bool)：密码，缺省值是true
+    - `maskRandomSeed` (bool)：随机种子 / 初始化向量，缺省值是true
+    - `maskPrivateKey` (bool)：私钥 / 机密密钥，缺省值是true
+    - `maskUrl` (bool)：URL 地址，缺省值是true
+    - `maskAll` (bool)：是否匿名化所有的实体类型，全开或者全关，覆盖上面所有设置，无缺省值。
+- 响应（JSON）：
+```json
+{ "output": { "status": "ok" }, "error": null }
+```
+
+示例（curl）：
+```bash
+curl -s -X POST http://127.0.0.1:8844/api/config \
+  -H 'Content-Type: application/json' \
+  # -H 'Authorization: Bearer <your-key>' \
+  -d '{
+    "maskConfig": {
+      "maskEmail": true,
+      "maskPhoneNumber": true,
+      "maskUserName": true,
+      "maskAddress": false,
+    }
+  }'
+```
+
 ## 匿名化与反匿名化
 
 这两个接口一起用于匿名化一段文本，处理匿名化的文本（比如翻译），再反匿名化处理后的文本。必须配对使用：每次匿名化都需要对应一次反匿名化，否则可能造成内存泄漏。可以先批量匿名化、处理完成后再批量反匿名化。

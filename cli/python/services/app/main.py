@@ -15,6 +15,10 @@ api = OneAIFWAPI()
 API_KEY = os.environ.get("AIFW_HTTP_API_KEY") or None
 
 
+class ConfigIn(BaseModel):
+	maskConfig: Dict[str, bool]
+
+
 class CallIn(BaseModel):
 	text: str
 	apiKeyFile: Optional[str] = None
@@ -55,6 +59,17 @@ def check_api_key(authorization: Optional[str] = Header(None)):
 @app.get("/api/health")
 async def health():
 	return {"status": "ok"}
+
+
+@app.post("/api/config")
+async def api_config(inp: ConfigIn, authorization: Optional[str] = Header(None)):
+	check_api_key(authorization)
+	try:
+		api.config(mask_config=inp.maskConfig or {})
+		return {"output": {"status": "ok"}, "error": None}
+	except Exception as e:
+		logger.exception("/api/config failed")
+		return {"output": None, "error": {"message": str(e), "code": None}}
 
 
 @app.post("/api/call")

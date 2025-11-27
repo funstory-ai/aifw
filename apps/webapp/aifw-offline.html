@@ -29,6 +29,21 @@
     <div class="row">
       <label><input type="checkbox" id="use-batch" /> Use batch (maskTextBatch)</label>
     </div>
+    <div class="row" id="mask-config-row">
+      <span>Mask types:</span>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskAddress" checked /> Address</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskEmail" checked /> Email</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskOrganization" checked /> Organization</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskUserName" checked /> User name</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskPhoneNumber" checked /> Phone</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskBankNumber" checked /> Bank</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskPayment" checked /> Payment</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskVerificationCode" checked /> Verification code</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskPassword" checked /> Password</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskRandomSeed" checked /> Random seed</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskPrivateKey" checked /> Private key</label>
+      <label style="margin-left: 12px;"><input type="checkbox" id="maskUrl" checked /> URL</label>
+    </div>
     <div class="row">
       <label for="text">Input text</label>
       <textarea id="text" placeholder="Type text with PII here..."></textarea>
@@ -53,6 +68,27 @@
       const restoredEl = document.getElementById('restored');
       const runBtn = document.getElementById('run');
 
+      function getMaskConfigFromUI() {
+        const byId = (id) => {
+          const el = document.getElementById(id);
+          return !!(el && el.checked);
+        };
+        return {
+          maskAddress: byId('maskAddress'),
+          maskEmail: byId('maskEmail'),
+          maskOrganization: byId('maskOrganization'),
+          maskUserName: byId('maskUserName'),
+          maskPhoneNumber: byId('maskPhoneNumber'),
+          maskBankNumber: byId('maskBankNumber'),
+          maskPayment: byId('maskPayment'),
+          maskVerificationCode: byId('maskVerificationCode'),
+          maskPassword: byId('maskPassword'),
+          maskRandomSeed: byId('maskRandomSeed'),
+          maskPrivateKey: byId('maskPrivateKey'),
+          maskUrl: byId('maskUrl'),
+        };
+      }
+
       async function main() {
         statusEl.textContent = 'Initializing AIFW...';
         // await aifw.init({
@@ -60,7 +96,7 @@
         //    modelsBase: './vendor/aifw-js/models/',
         //    maskConfig: {maskAll: true}
         //    });
-        await aifw.init({maskConfig: {maskAll: true}});
+        await aifw.init({ maskConfig: getMaskConfigFromUI() });
         statusEl.textContent = 'AIFW initialized.';
 
         let shutdownCalled = false;
@@ -71,6 +107,31 @@
         }
         window.addEventListener('pagehide', shutdownOnce, { once: true });
         window.addEventListener('beforeunload', shutdownOnce, { once: true });
+
+        // When user toggles mask checkboxes, update config at runtime
+        const maskIds = [
+          'maskAddress',
+          'maskEmail',
+          'maskOrganization',
+          'maskUserName',
+          'maskPhoneNumber',
+          'maskBankNumber',
+          'maskPayment',
+          'maskVerificationCode',
+          'maskPassword',
+          'maskRandomSeed',
+          'maskPrivateKey',
+          'maskUrl',
+        ];
+        for (const id of maskIds) {
+          const el = document.getElementById(id);
+          if (!el) continue;
+          el.addEventListener('change', () => {
+            if (!aifw || typeof aifw.config !== 'function') return;
+            const cfg = getMaskConfigFromUI();
+            aifw.config(cfg).catch((e) => console.warn('[offline] config failed', e));
+          });
+        }
 
         runBtn.addEventListener('click', async () => {
           try {

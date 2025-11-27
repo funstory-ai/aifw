@@ -56,6 +56,7 @@ pub fn build(b: *std.Build) void {
         "aifw_shutdown",
         "aifw_session_create",
         "aifw_session_destroy",
+        "aifw_session_config",
         // "aifw_session_mask",
         // "aifw_session_restore",
         "aifw_session_mask_and_out_meta",

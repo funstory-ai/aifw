@@ -217,9 +217,95 @@ def _write_pidfile_with_fallbacks(preferred_dir: str, port: int, pid: int) -> st
     return None
 
 
+def _mask_config_from_cfg(cfg) -> dict | None:
+    if not isinstance(cfg, dict):
+        return None
+    mask_cfg = cfg.get('mask_config') or cfg.get('maskConfig')
+    return mask_cfg if isinstance(mask_cfg, dict) and mask_cfg else None
+
+
+def _configure_api_instance(api_obj, mask_cfg) -> None:
+    if not mask_cfg or api_obj is None:
+        return
+    try:
+        cfg_fn = getattr(api_obj, 'config', None)
+        if callable(cfg_fn):
+            cfg_fn(mask_cfg)
+    except Exception:
+        pass
+
+
+def _apply_mask_config_http(port: int, mask_cfg: dict, http_api_key: str | None) -> None:
+    if not mask_cfg:
+        return
+    url = f"http://localhost:{port}/api/config"
+    payload = json.dumps({"maskConfig": mask_cfg}, ensure_ascii=False).encode('utf-8')
+    headers = {"Content-Type": "application/json"}
+    if http_api_key:
+        headers["Authorization"] = f"Bearer {http_api_key}"
+    for _ in range(30):
+        try:
+            req = urllib.request.Request(url, data=payload, headers=headers)
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                if 200 <= resp.getcode() < 300:
+                    print("aifw mask_config synced to server.")
+                    return
+        except Exception:
+            time.sleep(0.5)
+    print("warning: failed to apply mask_config via /api/config; please configure manually.")
+
+
+def _parse_bool_flag(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    v = value.strip().lower()
+    if v in ("1", "true", "yes", "y", "on"):
+        return True
+    if v in ("0", "false", "no", "n", "off"):
+        return False
+    return None
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    """Update mask configuration on a running HTTP service via /api/config."""
+    # Load base config for port / http_api_key defaults
+    cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
+    port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), 8844) or 8844)
+    http_api_key = _get_effective_with_env(
+        getattr(args, 'http_api_key', None),
+        ['AIFW_HTTP_API_KEY'],
+        cfg.get('http_api_key'),
+        None,
+    )
+
+    raw_flags = {
+        "maskAddress": _parse_bool_flag(getattr(args, 'mask_address', None)),
+        "maskEmail": _parse_bool_flag(getattr(args, 'mask_email', None)),
+        "maskOrganization": _parse_bool_flag(getattr(args, 'mask_organization', None)),
+        "maskUserName": _parse_bool_flag(getattr(args, 'mask_user_name', None)),
+        "maskPhoneNumber": _parse_bool_flag(getattr(args, 'mask_phone_number', None)),
+        "maskBankNumber": _parse_bool_flag(getattr(args, 'mask_bank_number', None)),
+        "maskPayment": _parse_bool_flag(getattr(args, 'mask_payment', None)),
+        "maskVerificationCode": _parse_bool_flag(getattr(args, 'mask_verification_code', None)),
+        "maskPassword": _parse_bool_flag(getattr(args, 'mask_password', None)),
+        "maskRandomSeed": _parse_bool_flag(getattr(args, 'mask_random_seed', None)),
+        "maskPrivateKey": _parse_bool_flag(getattr(args, 'mask_private_key', None)),
+        "maskUrl": _parse_bool_flag(getattr(args, 'mask_url', None)),
+        "maskAll": _parse_bool_flag(getattr(args, 'mask_all', None)),
+    }
+    mask_cfg = {k: v for k, v in raw_flags.items() if v is not None}
+    if not mask_cfg:
+        print("No mask_config flags provided; nothing to update.")
+        return 0
+
+    _apply_mask_config_http(port, mask_cfg, http_api_key)
+    return 0
+
+
 def cmd_direct_call(args: argparse.Namespace) -> int:
     # Load config (if available)
     cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
+    mask_cfg = _mask_config_from_cfg(cfg)
     # Configure logging destination and level for in-process run
     level = getattr(logging, (_get_effective_with_env(getattr(args, 'log_level', None), ['AIFW_LOG_LEVEL'], cfg.get('log_level'), 'INFO') or 'INFO').upper(), logging.INFO)
     scopes = _parse_scopes(_get_effective_with_env(getattr(args, 'log_scopes', None), ['AIFW_LOG_SCOPES'], cfg.get('log_scopes'), None))
@@ -228,8 +314,6 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     # Reset module loggers to avoid duplicate handlers
     for name in [
         'services.app',
-        'services.app.analyzer',
-        'services.app.anonymizer',
         'services.app.llm_client',
     ]:
         lg = logging.getLogger(name)
@@ -240,12 +324,9 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     # Third-party loggers default no more verbose than chosen level, min WARNING
     default_third_level = level if level >= logging.WARNING else logging.WARNING
     for name in [
-        'presidio', 'presidio-analyzer', 'presidio-anonymizer',
         'LiteLLM', 'httpx',
     ]:
-        if name.startswith('presidio'):
-            set_level = level if ('presidio' in scopes or 'all' in scopes) else default_third_level
-        elif name == 'LiteLLM' or name == 'httpx':
+        if name == 'LiteLLM' or name == 'httpx':
             set_level = level if ('litellm' in scopes or 'all' in scopes) else default_third_level
         else:
             set_level = default_third_level
@@ -270,8 +351,6 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
     for name in [
         'services.app',
-        'services.app.analyzer',
-        'services.app.anonymizer',
         'services.app.llm_client',
     ]:
         logging.getLogger(name).addHandler(handler)
@@ -283,6 +362,8 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     temp = float(_get_effective_with_env(getattr(args, 'temperature', None), ['AIFW_TEMPERATURE'], cfg.get('temperature'), 0.0) or 0.0)
 
     if stage == 'restored':
+        if mask_cfg:
+            _configure_api_instance(local_api.api, mask_cfg)
         output = local_api.call(
             text=text,
             api_key_file=api_key_file,
@@ -296,9 +377,10 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     from services.app.one_aifw_api import OneAIFWAPI  # lazy import
     from services.app.llm_client import LLMClient, load_llm_api_config
     api = OneAIFWAPI()
-    language = api._analyzer_wrapper.detect_language(text)
-    anon = api._anonymizer_wrapper.anonymize(text=text, operators=None, language=language)
-    anonymized_text = anon.get('text', '')
+    if mask_cfg:
+        _configure_api_instance(api, mask_cfg)
+    language = api.detect_language(text)
+    anonymized_text = api.mask_text(text=text, language=language)
 
     if stage == 'anonymized':
         print(anonymized_text)
@@ -320,6 +402,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     # Launch FastAPI service using uvicorn in background
     # Load config
     cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
+    mask_cfg = _mask_config_from_cfg(cfg)
     port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), args.port or 8844))
     env = os.environ.copy()
 
@@ -392,13 +475,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
                 "uvicorn.access": {"level": log_level.upper(), "handlers": ["default"], "propagate": False},
                 # App scopes
                 "services.app": {"level": app_level, "handlers": ["default"], "propagate": False},
-                "services.app.analyzer": {"level": app_level, "handlers": ["default"], "propagate": False},
-                "services.app.anonymizer": {"level": app_level, "handlers": ["default"], "propagate": False},
                 "services.app.llm_client": {"level": app_level, "handlers": ["default"], "propagate": False},
                 # Third-party
-                "presidio": {"level": pres_level, "handlers": ["default"], "propagate": False},
-                "presidio-analyzer": {"level": pres_level, "handlers": ["default"], "propagate": False},
-                "presidio-anonymizer": {"level": pres_level, "handlers": ["default"], "propagate": False},
                 "LiteLLM": {"level": llm_level, "handlers": ["default"], "propagate": False},
                 "httpx": {"level": llm_level, "handlers": ["default"], "propagate": False},
             },
@@ -431,6 +509,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
         print(f"aifw is running at http://localhost:{port}.")
         if not pidfile:
             print("warning: failed to write pidfile (try --work-dir ~/.aifw or set AIFW_WORK_DIR)")
+        if mask_cfg:
+            _apply_mask_config_http(port, mask_cfg, http_api_key)
         return 0
     else:
         # Background to file
@@ -458,7 +538,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
                 stderr=None,
                 preexec_fn=os.setsid,
                 close_fds=False,
-                cwd=PROJECT_ROOT,
+                cwd=PYTHON_ROOT,
             )
         # Write pidfile under work_dir (with fallback)
         pidfile = _write_pidfile_with_fallbacks(work_dir, port, proc.pid)
@@ -467,6 +547,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
         print(f"logs: {log_file}")
         if not pidfile:
             print("warning: failed to write pidfile (try --work-dir ~/.aifw or set AIFW_WORK_DIR)")
+        if mask_cfg:
+            _apply_mask_config_http(port, mask_cfg, http_api_key)
         return 0
 
 
@@ -844,6 +926,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_mmr.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")
     p_mmr.add_argument("--http-api-key", help="HTTP API key for Authorization header (env: AIFW_HTTP_API_KEY)")
     p_mmr.set_defaults(func=cmd_multi_mask_one_restore)
+
+    # config: update mask configuration on HTTP backend
+    p_cfg = sub.add_parser("config", help="Update mask configuration on HTTP backend via /api/config")
+    p_cfg.add_argument("--config", help="Path to aifw config file (json/yaml)")
+    p_cfg.add_argument("--port", type=int, default=8844)
+    p_cfg.add_argument("--work-dir", help="Base dir for config/logs (default ~/.aifw or $AIFW_WORK_DIR)")
+    p_cfg.add_argument("--http-api-key", help="HTTP API key for Authorization header (env: AIFW_HTTP_API_KEY)")
+    # mask_config boolean flags: accept true/false-like strings; unspecified means "no change"
+    p_cfg.add_argument("--mask-address", help="Enable/disable masking PHYSICAL_ADDRESS (true/false)")
+    p_cfg.add_argument("--mask-email", help="Enable/disable masking EMAIL_ADDRESS (true/false)")
+    p_cfg.add_argument("--mask-organization", help="Enable/disable masking ORGANIZATION (true/false)")
+    p_cfg.add_argument("--mask-user-name", help="Enable/disable masking USER_MAME (true/false)")
+    p_cfg.add_argument("--mask-phone-number", help="Enable/disable masking PHONE_NUMBER (true/false)")
+    p_cfg.add_argument("--mask-bank-number", help="Enable/disable masking BANK_NUMBER (true/false)")
+    p_cfg.add_argument("--mask-payment", help="Enable/disable masking PAYMENT (true/false)")
+    p_cfg.add_argument("--mask-verification-code", help="Enable/disable masking VERIFICATION_CODE (true/false)")
+    p_cfg.add_argument("--mask-password", help="Enable/disable masking PASSWORD (true/false)")
+    p_cfg.add_argument("--mask-random-seed", help="Enable/disable masking RANDOM_SEED (true/false)")
+    p_cfg.add_argument("--mask-private-key", help="Enable/disable masking PRIVATE_KEY (true/false)")
+    p_cfg.add_argument("--mask-url", help="Enable/disable masking URL_ADDRESS (true/false)")
+    p_cfg.add_argument("--mask-all", help="Enable/disable all mask bits at once (true/false)")
+    p_cfg.set_defaults(func=cmd_config)
 
     return parser
 

@@ -152,6 +152,53 @@ await deinit();
 
 ---
 
+### `config(maskConfig)`
+
+在不重新初始化的前提下，**运行时更新当前会话的匿名化配置**。其配置项与 `init({ maskConfig })` 中的 `maskConfig` 字段完全一致。
+
+**参数：**
+
+- `maskConfig` (Object): 按实体类型控制是否进行匿名化（占位符替换 + 写入元数据），所有字段均为可选布尔值：
+  - `maskAddress` (Boolean): 是否匿名化物理地址（PHYSICAL_ADDRESS），缺省值是 false。
+  - `maskEmail` (Boolean): 是否匿名化邮箱地址（EMAIL_ADDRESS），缺省值是 true。
+  - `maskOrganization` (Boolean): 是否匿名化组织/公司名（ORGANIZATION），缺省值是 true。
+  - `maskUserName` (Boolean): 是否匿名化人名/用户名（USER_MAME），缺省值是 true。
+  - `maskPhoneNumber` (Boolean): 是否匿名化电话号码（PHONE_NUMBER），缺省值是 true。
+  - `maskBankNumber` (Boolean): 是否匿名化银行卡号（BANK_NUMBER），缺省值是 true。
+  - `maskPayment` (Boolean): 是否匿名化支付相关信息（PAYMENT），缺省值是 true。
+  - `maskVerificationCode` (Boolean): 是否匿名化验证码（VERIFICATION_CODE），缺省值是 true。
+  - `maskPassword` (Boolean): 是否匿名化密码（PASSWORD），缺省值是 true。
+  - `maskRandomSeed` (Boolean): 是否匿名化随机种子（RANDOM_SEED），缺省值是 true。
+  - `maskPrivateKey` (Boolean): 是否匿名化私钥（PRIVATE_KEY），缺省值是 true。
+  - `maskUrl` (Boolean): 是否匿名化 URL（URL_ADDRESS），缺省值是 true。
+  - `maskAll` (Boolean): 是否匿名化所有的实体类型，全开或者全关，覆盖上面所有设置，无缺省值。
+
+**返回值：**
+
+- `Promise<void>`: 配置应用完成后解析
+
+**示例：**
+
+```javascript
+import { init, config } from './libaifw.js';
+
+// 1) 初始化时使用默认策略
+await init();
+
+// 2) 运行过程中动态调整：只匿名化邮箱和手机号，人名与地址保留原文
+await config({
+  maskAddress: false,
+  maskEmail: true,
+  maskPhoneNumber: true,
+  maskUserName: false
+});
+
+// 3) 一次性打开所有掩码（包括地址）
+await config({ maskAll: true });
+```
+
+---
+
 ## 语言检测
 
 ### `detectLanguage(text)`

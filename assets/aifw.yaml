@@ -14,10 +14,24 @@ log_dest: "file"
 log_file: "~/.aifw/aifw_server.log"
 temperature: 0.0
 
+# The number of month to keep log file, the out of date log file will be deleted.
+log_months_to_keep: 6
+
 # (Optional) filters selection
 filters:
   whitelist: all
 
-# The number of month to keep log file, the out of date log file will be deleted.
-log_months_to_keep: 6
-
+# (Optional) mask configuration
+mask_config:
+  maskAddress: true
+  maskEmail: true
+  maskOrganization: true
+  maskUserName: true
+  maskPhoneNumber: true
+  maskBankNumber: true
+  maskPayment: true
+  maskVerificationCode: true
+  maskPassword: true
+  maskRandomSeed: true
+  maskPrivateKey: true
+  maskUrl: true

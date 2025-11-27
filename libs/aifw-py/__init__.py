@@ -4,6 +4,7 @@ Public API for aifw-py.
 This module mirrors the high-level API of aifw-js:
 - init(options)
 - deinit()
+- config(mask_cfg)
 - detect_language(text)
 - mask_text(text, language)
 - restore_text(masked_text, mask_meta)
@@ -15,8 +16,8 @@ This module mirrors the high-level API of aifw-js:
 from .libaifw import (
     init,
     deinit,
-    detect_language,
     config,
+    detect_language,
     mask_text,
     restore_text,
     mask_text_batch,
@@ -28,8 +29,8 @@ from .libaifw import (
 __all__ = [
     "init",
     "deinit",
-    "detect_language",
     "config",
+    "detect_language",
     "mask_text",
     "restore_text",
     "mask_text_batch",

@@ -651,6 +651,31 @@ async function destroySession(session) {
   }
 }
 
+export async function config(maskConfig = {}) {
+  if (!wasm || !session?.handle) {
+    throw new Error('AIFW not initialized');
+  }
+  const cfg = maskConfig || {};
+  const maskBits = getMaskBitsFromMaskConfig(cfg);
+  // SessionConfig extern struct layout in core:
+  //   MaskConfig { u32 enable_mask_bits } + RestoreConfig {} => 4 bytes total
+  const size = 4;
+  const ptr = wasm.aifw_malloc(size);
+  if (!ptr) {
+    throw new Error('aifw_malloc failed for SessionConfig');
+  }
+  try {
+    const dv = new DataView(wasm.memory.buffer);
+    dv.setUint32(ptr, maskBits >>> 0, true);
+    if (typeof wasm.aifw_session_config !== 'function') {
+      throw new Error('aifw_session_config not exported from core wasm');
+    }
+    wasm.aifw_session_config(session.handle, ptr);
+  } finally {
+    freeBuf(ptr, size, 1);
+  }
+}
+
 function selectNer(language) {
   const lang = String(language || '').toLowerCase();
   // Treat zh, zh-cn, zh-tw, zh-hans, zh-hant as Chinese
