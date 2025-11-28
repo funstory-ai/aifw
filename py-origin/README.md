@@ -112,3 +112,31 @@ python -m aifw stop
 ### API documentation
 
 See `docs/oneaifw_services_api.md` for all API interfaces, request/response formats, and curl examples. All responses include `output` and `error`. The `Authorization` header accepts either `KEY` or `Bearer KEY` formats.
+
+
+## Docker images for py-origin (spaCy profiles)
+
+You can build different Docker images for the `py-origin` service with various spaCy model profiles via `--build-arg SPACY_PROFILE=...`:
+
+- `minimal` (default): en_core_web_sm, zh_core_web_sm, xx_ent_wiki_sm  
+- `fr`: minimal + fr_core_news_sm  
+- `de`: minimal + de_core_news_sm  
+- `ja`: minimal + ja_core_news_sm  
+- `multi`: minimal + fr/de/ja  
+
+From the repo root:
+
+```bash
+cd py-origin
+
+# Build minimal
+docker build -t oneaifw:minimal .
+
+# Build French / German / Japanese
+docker build --build-arg SPACY_PROFILE=fr -t oneaifw:fr .
+docker build --build-arg SPACY_PROFILE=de -t oneaifw:de .
+docker build --build-arg SPACY_PROFILE=ja -t oneaifw:ja .
+
+# Build multi-language
+docker build --build-arg SPACY_PROFILE=multi -t oneaifw:multi .
+```

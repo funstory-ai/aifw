@@ -4,8 +4,9 @@ OneAIFW
 OneAIFW is a local, lightweight “AI firewall” that anonymizes sensitive data before sending it to LLMs, and restores it after responses.
 
 - Core engine: Zig + Rust (WASM and native)
-- Frontend library: `@oneaifw/aifw-js` (Transformers.js + our WASM)
-- Demos: Web app, Browser Extension
+- JS binding: libs/aifw-js (Transformers.js + WASM aifw core)
+- Python binding: libs/aifw-py (Python's transformers package + native aifw core)
+- Demos: Web app(apps/webapp), Browser Extension(browser_extension)
 - Backend service based on presidio/LiteLLM: `py-origin` (FastAPI + Presidio/LiteLLM)
 
 ## What we protect for you
@@ -13,7 +14,7 @@ OneAIFW is a local, lightweight “AI firewall” that anonymizes sensitive data
 Privacy:
 - Physical Address
 - Email Address
-- Name[optional]
+- Name
 - Phone
 - Bank Account
 - Paymant Information
@@ -26,6 +27,10 @@ Crypto:
 - Seed
 - Private Key
 - Address
+
+## The Demo website
+The site at `https://oneaifw.com/` is a full end‑to‑end demo of the OneAIFW project.  
+It showcases how OneAIFW detects sensitive information, anonymizes it before LLM calls, and restores it afterward, all in a browser‑friendly UI backed by the same core engine used in this repository.
 
 ## Monorepo layout
 
@@ -40,19 +45,33 @@ Crypto:
 
 High‑level architecture (overview):
 
-- aifw core library (Zig + Rust): provides the masking/restoring pipelines and regex/NER span fusion; builds to native and WASM for browser use.
-- aifw-js (`@oneaifw/aifw-js`): browser library that runs NER with Transformers.js, converts spans to byte offsets, calls the WASM core to mask/restore, and exposes a friendly API (including batch and language‑aware masking).
-- Backends and apps: `py-origin` HTTP service/CLI, `apps/webapp` demo, and `browser_extension`.
+OneAIFW is built as a layered, cross‑platform stack around a single core library.  
+The aifw core library is designed to compile both as a native library (for backend services and CLIs) and as a WASM module (for browsers and JS runtimes), with language bindings providing ergonomic APIs on top.
+
+- **Core engine: aifw core library (Zig + Rust)**  
+  Cross‑platform engine that implements the masking/restoring pipelines and regex/NER span fusion.  
+  It builds to:
+  - Native libraries for use from Python and other host languages.
+  - WASM (`wasm32-freestanding`) for use in browsers and JS environments.
+
+- **Language bindings**  
+  - **aifw-js (`@oneaifw/aifw-js`)**: JavaScript/TypeScript binding that runs NER with Transformers.js, converts spans to byte offsets, calls the WASM core to mask/restore, and exposes a high‑level API (including batch, language‑aware masking, and integration helpers for web apps and extensions).  
+  - **aifw-py**: Python binding that loads the native core library and exposes a simple API (`mask_text`, `restore_text`, batch variants, and configuration) used by Python CLIs and HTTP services.
+
+- **Backends and apps**  
+  - **Web demo (`apps/webapp`)**: Vite‑based frontend that talks to the core via `aifw-js`, demonstrating end‑to‑end masking/restoring flows entirely in the browser or against a backend service.  
+  - **Browser extension (`browser_extension`)**: Example Chrome/Edge extension that injects OneAIFW into arbitrary pages to protect prompts before they are sent to LLM UIs.  
+  - **Python services (`cli/python`)**: HTTP APIs and CLI wrappers built on top of `aifw-py`, suitable for running as local daemons or containerized services behind gateways.
+  - **Presidio based services (`py-origin`)**: HTTP APIs built on top of presidio library, suitable for running as local daemons or containerized services behind gateways.
+
+- **Production demo website**  
+  The public demo at `https://oneaifw.com/` is built from this stack and uses the same core engine and bindings described above.
 
 ## Prerequisites
 
-- Zig 0.15.1
+- Zig 0.15.2
 - Rust toolchain (stable) + Cargo
   - `rustup target add wasm32-unknown-unknown`
-- llvm tools: llvm-ar
-  - Install llvm
-  - Or add symbol link from the LLVM that is required when installing using Zig
-      * In macOS: `ln -s $(brew --prefix llvm@20)/bin/llvm-ar /usr/local/bin/llvm-ar`
 - Node.js 18+ and pnpm 9+
   - Install pnpm: `npm i -g pnpm`
 - Python 3.10+ (for `py-origin` backend) and pip/venv
@@ -60,7 +79,7 @@ High‑level architecture (overview):
 Verify versions:
 
 ```bash
-zig version           # expect 0.15.1
+zig version           # expect 0.15.2
 rustc --version
 cargo --version
 node -v
@@ -295,7 +314,7 @@ rsync -a --exclude 'models' libs/aifw-js/dist/* browser_extension/vendor/aifw-js
 # then load the folder as an unpacked extension
 ```
 
-## Python backend (`py-origin`)
+## Presidio based backend (`py-origin`)
 
 The backend service and CLI are in `py-origin/`. It provides HTTP APIs:
 - `/api/call`, `/api/mask_text`, `/api/restore_text`, `/api/mask_text_batch`, `/api/restore_text_batch`
@@ -307,27 +326,38 @@ Start here: `py-origin/README.md`.
 
 ## Docker
 
-Build profiles for spaCy models via `--build-arg SPACY_PROFILE=...`:
+This repository provides Docker images for running OneAIFW as a local HTTP service.
 
-- minimal (default): en_core_web_sm, zh_core_web_sm, xx_ent_wiki_sm
-- fr: minimal + fr_core_news_sm
-- de: minimal + de_core_news_sm
-- ja: minimal + ja_core_news_sm
-- multi: minimal + fr/de/ja
+- For the legacy `py-origin` service (FastAPI + Presidio/LiteLLM), see detailed Docker build instructions in `py-origin/README.md`.
+- For the newer CLI‑based Python web server (based on `cli/python/aifw.py` and `uvicorn`), you can build and run a self‑contained image as follows.
+
+### Build CLI/Python web server image (`cli/python`)
+
+From the repo root:
 
 ```bash
-cd py-origin
-# Build minimal
-docker build -t oneaifw:minimal .
-
-# Build French / German / Japanese
-docker build --build-arg SPACY_PROFILE=fr -t oneaifw:fr .
-docker build --build-arg SPACY_PROFILE=de -t oneaifw:de .
-docker build --build-arg SPACY_PROFILE=ja -t oneaifw:ja .
-
-# Build multi-language
-docker build --build-arg SPACY_PROFILE=multi -t oneaifw:multi .
+cd cli/python
+docker build -t oneaifw:latest -f Dockerfile .
 ```
+
+This image bundles:
+- The Zig aifw core native library.
+- The `aifw-py` Python binding and its dependencies.
+- The `cli/python` HTTP server entrypoint (`aifw launch` under the hood).
+
+### Run the CLI/Python web server container
+
+Assuming your LLM API key JSON is at `~/.aifw/your-key.json` on the host:
+
+```bash
+docker run --rm -p 8844:8844 \
+  -e AIFW_API_KEY_FILE=/data/aifw/your-key.json \
+  -v $HOME/.aifw:/data/aifw \
+  oneaifw:latest
+```
+
+The container will start the AIFW HTTP server on port `8844` inside the container (exposed to the host via `-p 8844:8844`).  
+You can then call the HTTP APIs or use the `aifw` CLI inside other containers pointing at this service.
 
 ### Set api_key_file for Docker
 
