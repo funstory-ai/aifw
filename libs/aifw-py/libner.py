@@ -224,15 +224,27 @@ def build_ner_pipeline(model_id: str, options: Optional[Dict[str, Any]] = None) 
             return []
 
     if not base:
-        logger.info("[aifw-py] modelsBase not set; NER pipeline will be disabled (regex-only).")
+        logger.warning(
+            "[aifw-py] modelsBase not set; NER pipeline will be disabled (regex-only). "
+            "Set AIFW_MODELS_BASE or pass options={'models': {'modelsBase': '/path/to/ner-models'}} to init()."
+        )
         return _NoopPipe()
     model_dir = os.path.join(base.rstrip("/"), model_id)
     if not os.path.isdir(model_dir):
-        logger.warning("[aifw-py] model path not found: %s; NER pipeline disabled (regex-only).", model_dir)
+        logger.warning(
+            "[aifw-py] model path not found: %s; NER pipeline disabled (regex-only). "
+            "Ensure models are prepared under modelsBase (AIFW_MODELS_BASE).",
+            model_dir,
+        )
         return _NoopPipe()
     onnx_path = os.path.join(model_dir, "onnx", "model_quantized.onnx")
     if not os.path.isfile(onnx_path):
-        logger.warning("[aifw-py] ONNX model not found: %s; NER pipeline disabled (regex-only).", onnx_path)
+        logger.warning(
+            "[aifw-py] ONNX model not found: %s; NER pipeline disabled (regex-only). "
+            "Expected quantized ONNX at '<modelsBase>/%s/onnx/model_quantized.onnx'.",
+            onnx_path,
+            model_id,
+        )
         return _NoopPipe()
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, trust_remote_code=False)

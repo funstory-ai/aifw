@@ -29,7 +29,7 @@ Crypto:
 - Address
 
 ## The Demo website
-The site at `https://oneaifw.com/` is a full end‑to‑end demo of the OneAIFW project.  
+The site at [oneaifw.com](https://oneaifw.com/) is a full end‑to‑end demo of the OneAIFW project.  
 It showcases how OneAIFW detects sensitive information, anonymizes it before LLM calls, and restores it afterward, all in a browser‑friendly UI backed by the same core engine used in this repository.
 
 ## Monorepo layout
@@ -65,7 +65,7 @@ The aifw core library is designed to compile both as a native library (for backe
   - **Presidio based services (`py-origin`)**: HTTP APIs built on top of presidio library, suitable for running as local daemons or containerized services behind gateways.
 
 - **Production demo website**  
-  The public demo at `https://oneaifw.com/` is built from this stack and uses the same core engine and bindings described above.
+  The public demo at [oneaifw.com](https://oneaifw.com/) is built from this stack and uses the same core engine and bindings described above.
 
 ## Prerequisites
 

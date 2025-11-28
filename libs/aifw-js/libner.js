@@ -21,6 +21,14 @@ export function initEnv({ wasmBase = '/wasm/', modelsBase = '', threads, simd, c
       // Use local path (served by same origin)
       env.localModelPath = basePath; // transformers will fetch from `${env.localModelPath}/${modelId}/...`
     }
+  } else {
+    // No explicit modelsBase specified; NER models may need to be fetched from remote sources only.
+    // In offline environments this will result in NER being effectively disabled (regex-only).
+    console.warn(
+      '[aifw-js] modelsBase is not configured in initEnv(); NER models will only be available ' +
+      'if transformers can fetch them from remote sources. For offline/local use, pass ' +
+      "init({ models: { modelsBase: '/path/to/ner-models' } }) in aifw-js."
+    );
   }
   if (customCache) {
     env.useCustomCache = true;

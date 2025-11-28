@@ -213,6 +213,12 @@ def init(options: Optional[Dict[str, Any]] = None) -> None:
         models_base = options["models"].get("modelsBase")
     if not models_base:
         models_base = os.environ.get("AIFW_MODELS_BASE")
+    if not models_base:
+        logger.warning(
+            "[aifw-py] modelsBase is not configured (no options['models']['modelsBase'] "
+            "and AIFW_MODELS_BASE is not set); NER models will NOT be loaded. "
+            "Only regex-based PII detection will be used."
+        )
     ner_init_env({
         "modelsBase": models_base,
     })

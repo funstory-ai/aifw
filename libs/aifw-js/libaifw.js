@@ -593,13 +593,32 @@ export async function init(options = {}) {
 
   // Preload NER pipelines for EN(default) and ZH
   const [enPipe, zhPipe] = await Promise.all([
-    nerLib.buildNerPipeline(enModelId, { quantized: true }).catch((e) => { console.warn('load EN model failed', e); return null; }),
-    nerLib.buildNerPipeline(zhModelId, { quantized: true }).catch((e) => { console.warn('load ZH model failed', e); return null; }),
+    nerLib.buildNerPipeline(enModelId, { quantized: true }).catch((e) => {
+      console.warn(
+        '[aifw-js] failed to load EN NER model; NER pipeline will be disabled (regex-only). ' +
+        'Core regex recognizers will still run, but NER-based detection is unavailable.',
+        e
+      );
+      return null;
+    }),
+    nerLib.buildNerPipeline(zhModelId, { quantized: true }).catch((e) => {
+      console.warn(
+        '[aifw-js] failed to load ZH NER model; will try to fall back to EN model for zh text.',
+        e
+      );
+      return null;
+    }),
   ]);
   nerPipelines.default = enPipe;
   nerPipelines.zh = zhPipe || enPipe;
-  if (!zhPipe) {
-    console.warn('load zh NER model failed, using en model instead.');
+  if (!enPipe) {
+    console.warn(
+      '[aifw-js] EN NER pipeline is not available; all languages will run without NER (regex-only).'
+    );
+  } else if (!zhPipe) {
+    console.warn(
+      '[aifw-js] ZH NER pipeline is not available; zh texts will fall back to EN NER model.'
+    );
   }
 
   session = await createSession(maskBits);
