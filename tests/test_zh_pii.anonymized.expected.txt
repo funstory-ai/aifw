@@ -1,0 +1,30 @@
+亲爱的客服团队：
+您好！我是来自宏信科技公司的约翰·A·杜（用户名：johndoe_1984）。抱歉这封邮件有点长 🙏，我想反馈一个小小的账户问题。
+我的家庭住址是：
+中国北京市朝阳区建国路88号国贸中心A座1208室（对，就是之前表格里那个旧地址——上次拼错了，是我的疏忽😅）。
+您可以通过以下方式联系我：
+邮箱：__PII_EMAIL_ADDRESS_1__
+电话（美国）：__PII_PHONE_NUMBER_2__
+手机（中国）：__PII_PHONE_NUMBER_3__（目前仍然有效）。
+关于您提到的退款问题，我的银行账户号是：__PII_PHONE_NUMBER_4__。
+另外，也可以使用我的测试信用卡（仅供测试使用）：
+Visa卡号：__PII_PHONE_NUMBER_5__，安全码（CVV）：123，到期时间：12/34 —— 请不要实际扣款，仅供QA测试用途。
+若要登录测试环境，请使用以下临时验证码：9F4T2A。
+测试系统的密码为：S3cure!Passw0rd（测试完我会重置的，放心！）。
+在钱包演示系统中（同样是测试数据），以下是助记词：
+river apple orange cable window magnet winter fee bonus ladder camera peach
+此外是一个伪造的私钥块（仅供解析测试使用，非真实密钥）：
+-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC1w8P1x0kQbZpx
+uH7u2/1aYgH0b8oE4R2H3yV2gJg0f2oTg9zZQ97lP0JqR9x8Xx4j6ya2q4Z3Xx2F
+m2T1z+qk0a5Dq7mWkKX8rJq6fQIDAQABAoIBAQCd9E2J4K1Y9uRFGk1V3k1kGm3T
+l9aZKqv0o4h5zY+G7n8Gg3PzKj3e3lG7K1f5m0zV3Y1gM3s1V9r7YjX2Z2c9uL8k
+-----END PRIVATE KEY-----
+如果您需要更多信息，可以访问以下链接：
+🔗 __PII_URL_ADDRESS_6__
+或我们的文档网站：www.example.org/guide?lang=zh-CN
+（有时候公司内网链接 __PII_URL_ADDRESS_7__ 会自动跳转，有点奇怪，仅供参考。）
+非常感谢您的帮助！如有任何问题，请随时联系我。
+此致
+敬礼
+约翰·杜

@@ -39,6 +39,12 @@ jobs:
           pip install -r cli/python/services/requirements.txt
           pip install -r libs/aifw-py/requirements.txt
 
+      - name: Run aifw-py tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python tests/test-aifw-py/test_cli.py
+
       - name: Start fake LLM (echo) in background
         run: |
           cd py-origin
