@@ -1087,6 +1087,7 @@ pub export fn aifw_shutdown() void {
         api_mutex.lock();
         defer api_mutex.unlock();
     }
+    std.log.info("[c-api] shutdown", .{});
     RegexRecognizer.shutdownCache();
     globalAllocatorDeinit();
 }

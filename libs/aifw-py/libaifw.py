@@ -38,6 +38,7 @@ _NER_EN = None
 _NER_ZH = None
 _SESSION_OPEN = False
 _CORE = None  # ctypes.CDLL
+_CORE_SHUTDOWN_CALLED = False
 _SESSION_HANDLE = c_void_p(0)
 
 
@@ -228,14 +229,18 @@ def init(options: Optional[Dict[str, Any]] = None) -> None:
 
 def deinit() -> None:
     """Tear down runtime."""
-    global _NER_EN, _NER_ZH, _SESSION_OPEN, _CORE, _SESSION_HANDLE
+    global _NER_EN, _NER_ZH, _SESSION_OPEN, _CORE, _CORE_SHUTDOWN_CALLED, _SESSION_HANDLE
     try:
         _destroy_session()
     except Exception:
         pass
     try:
-        if _CORE:
+        # Only call shutdown once, even if deinit is called multiple times
+        if _CORE_SHUTDOWN_CALLED:
+            logger.warning("[aifw-py] shutdown already called, skipping")
+        elif _CORE:
             _CORE.aifw_shutdown()
+            _CORE_SHUTDOWN_CALLED = True
     except Exception:
         pass
     _SESSION_HANDLE = c_void_p(0)

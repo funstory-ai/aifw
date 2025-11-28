@@ -171,35 +171,3 @@ class OneAIFWAPI:
         # 4) restore masked text plus matching metadata, return a restored text.
         restored = self._aifw.restore_text(masked_text=output, mask_meta=meta_bytes)
         return restored
-
-
-# Singleton and module-level function for convenience
-api = OneAIFWAPI()
-
-
-def call(
-    text: str,
-    api_key_file: Optional[str] = None,
-    model: Optional[str] = None,
-    temperature: float = 0.0,
-) -> str:
-    return api.call(
-        text=text,
-        api_key_file=api_key_file,
-        model=model,
-        temperature=temperature,
-    )
-
-
-def mask_text(text: str, language: Optional[str] = None) -> Dict[str, Any]:
-    return api.mask_text(text=text, language=language)
-
-
-def restore_text(text: str, mask_meta: Any) -> str:
-    return api.restore_text(text=text, mask_meta=mask_meta)
-
-
-def config(mask_config: Dict[str, Any]) -> None:
-    api.config(mask_config)
-
-
