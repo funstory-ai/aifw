@@ -18,6 +18,19 @@ class OneAIFWAPI:
         self._analyzer_wrapper = AnalyzerWrapper()
         self._anonymizer_wrapper = AnonymizerWrapper(self._analyzer_wrapper)
         self._llm = LLMClient()
+        # Apply default maskConfig (docs defaults) so behavior is stable.
+        self.config(mask_config={})
+
+    def config(self, mask_config: Dict[str, Any]) -> None:
+        """Configure runtime masking behavior for this API instance.
+
+        This is used by HTTP endpoint POST /api/config and by local CLI direct_call mode.
+        """
+        try:
+            self._anonymizer_wrapper.set_mask_config(mask_config or {})
+        except Exception:
+            # Configuration should not crash callers; keep previous config.
+            return
 
     # Internal helpers (not for external exposure)
     def _analyze(self, text: str, language: str = "en") -> List[EntitySpan]:

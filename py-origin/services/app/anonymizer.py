@@ -20,6 +20,82 @@ class AnonymizerWrapper:
         # but also provide reversible placeholder flow.
         self.anonymizer = AnonymizerEngine()
         self.analyzer_wrapper = analyzer_wrapper
+        # Runtime mask configuration (mirrors docs for /api/config -> maskConfig).
+        # This wrapper enforces the policy by filtering analyzer spans before masking.
+        self._mask_config: Dict[str, Any] = {}
+
+    def set_mask_config(self, mask_config: Dict[str, Any]) -> None:
+        """Update runtime mask configuration.
+
+        mask_config schema mirrors JS maskConfig:
+        {
+          "maskAddress": bool,
+          "maskEmail": bool,
+          "maskOrganization": bool,
+          "maskUserName": bool,
+          "maskPhoneNumber": bool,
+          "maskBankNumber": bool,
+          "maskPayment": bool,
+          "maskVerificationCode": bool,
+          "maskPassword": bool,
+          "maskRandomSeed": bool,
+          "maskPrivateKey": bool,
+          "maskUrl": bool,
+          "maskAll": bool
+        }
+        """
+        if isinstance(mask_config, dict):
+            self._mask_config = dict(mask_config)
+
+    def _is_entity_enabled(self, entity_type: str) -> bool:
+        """Return True if the entity type should be masked under current maskConfig."""
+        cfg = self._mask_config or {}
+        mask_all = cfg.get("maskAll")
+        if isinstance(mask_all, bool):
+            return mask_all
+
+        # Defaults per docs: most true except address false.
+        defaults: Dict[str, bool] = {
+            "maskAddress": False,
+            "maskEmail": True,
+            "maskOrganization": True,
+            "maskUserName": True,
+            "maskPhoneNumber": True,
+            "maskBankNumber": True,
+            "maskPayment": True,
+            "maskVerificationCode": True,
+            "maskPassword": True,
+            "maskRandomSeed": True,
+            "maskPrivateKey": True,
+            "maskUrl": True,
+        }
+        effective = dict(defaults)
+        for k, v in cfg.items():
+            if k in defaults and isinstance(v, bool):
+                effective[k] = v
+
+        # Map Presidio entity types to maskConfig keys
+        mapping = {
+            "PHYSICAL_ADDRESS": "maskAddress",
+            "EMAIL_ADDRESS": "maskEmail",
+            "ORGANIZATION": "maskOrganization",
+            # Treat PERSON and USER_NAME as "maskUserName"
+            "PERSON": "maskUserName",
+            "USER_NAME": "maskUserName",
+            "PHONE_NUMBER": "maskPhoneNumber",
+            "BANK_NUMBER": "maskBankNumber",
+            "PAYMENT": "maskPayment",
+            "VERIFY_CODE": "maskVerificationCode",
+            "PASSWORD": "maskPassword",
+            "RANDOM_SEED": "maskRandomSeed",
+            "PRIVATE_KEY": "maskPrivateKey",
+            "URL": "maskUrl",
+        }
+        key = mapping.get(str(entity_type or "").upper())
+        if not key:
+            # For unknown entities, keep backward-compatible behavior: mask by default.
+            return True
+        return bool(effective.get(key, True))
 
     def anonymize(self, text: str, operators: Optional[Dict[str, Dict[str, Any]]] = None, language: str = 'en'):
         # Run analysis to get spans
@@ -30,6 +106,12 @@ class AnonymizerWrapper:
             logger.debug(f"anonymize: input_lang={language} fallback_to_en")
             results = self.analyzer_wrapper.analyze(text=text, language='en')
         logger.debug(f"anonymize: input_lang={language} raw_results={[ (r.entity_type, r.start, r.end, getattr(r,'score',None)) for r in results ]}")
+        # Apply maskConfig filtering before anonymization
+        if results:
+            before = len(results)
+            results = [r for r in results if self._is_entity_enabled(getattr(r, "entity_type", ""))]
+            if before != len(results):
+                logger.debug("anonymize: maskConfig filtered %s -> %s spans", before, len(results))
         # Build placeholders map and replace from end
         placeholders = {}
         new_text = text

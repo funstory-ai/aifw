@@ -114,6 +114,57 @@ def _find_and_load_config(config_arg: str | None, work_dir_arg: str | None) -> t
             break
     return _load_config(cfg_path), cfg_path
 
+def _mask_config_from_cfg(cfg: dict) -> dict | None:
+    """Extract mask_config from config dict (supports snake_case and camelCase)."""
+    if not isinstance(cfg, dict):
+        return None
+    mask_cfg = cfg.get('mask_config') or cfg.get('maskConfig')
+    return mask_cfg if isinstance(mask_cfg, dict) and mask_cfg else None
+
+
+def _configure_api_instance(api_obj, mask_cfg: dict | None) -> None:
+    """Configure in-process API object if it exposes config()."""
+    if not mask_cfg or api_obj is None:
+        return
+    try:
+        cfg_fn = getattr(api_obj, 'config', None)
+        if callable(cfg_fn):
+            cfg_fn(mask_cfg)
+    except Exception:
+        pass
+
+
+def _wait_for_health(port: int, timeout_s: float = 15.0) -> bool:
+    """Wait until /api/health is reachable."""
+    deadline = time.time() + float(timeout_s)
+    url = f"http://127.0.0.1:{port}/api/health"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=0.8) as resp:
+                if 200 <= resp.getcode() < 300:
+                    return True
+        except Exception:
+            time.sleep(0.2)
+    return False
+
+
+def _apply_mask_config_http(port: int, mask_cfg: dict, cfg: dict, args: argparse.Namespace) -> bool:
+    """Apply maskConfig to a running server via /api/config."""
+    if not mask_cfg:
+        return True
+    url = f"http://127.0.0.1:{port}/api/config"
+    payload = json.dumps({"maskConfig": mask_cfg}, ensure_ascii=False).encode('utf-8')
+    headers = _build_headers({'Content-Type': 'application/json'}, cfg, args)
+    for _ in range(20):
+        try:
+            req = urllib.request.Request(url, data=payload, headers=headers)
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                if 200 <= resp.getcode() < 300:
+                    return True
+        except Exception:
+            time.sleep(0.25)
+    return False
+
 
 def _monthly_log_path(base_path: str, now: datetime | None = None) -> str:
     """Append -YYYY-MM before extension (or at end) for monthly logs."""
@@ -196,6 +247,7 @@ def _write_pidfile_with_fallbacks(preferred_dir: str, port: int, pid: int) -> st
 def cmd_direct_call(args: argparse.Namespace) -> int:
     # Load config (if available)
     cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
+    mask_cfg = _mask_config_from_cfg(cfg)
     # Configure logging destination and level for in-process run
     level = getattr(logging, (_get_effective_with_env(getattr(args, 'log_level', None), ['AIFW_LOG_LEVEL'], cfg.get('log_level'), 'INFO') or 'INFO').upper(), logging.INFO)
     scopes = _parse_scopes(_get_effective_with_env(getattr(args, 'log_scopes', None), ['AIFW_LOG_SCOPES'], cfg.get('log_scopes'), None))
@@ -259,6 +311,8 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     temp = float(_get_effective_with_env(getattr(args, 'temperature', None), ['AIFW_TEMPERATURE'], cfg.get('temperature'), 0.0) or 0.0)
 
     if stage == 'restored':
+        if mask_cfg:
+            _configure_api_instance(local_api.api, mask_cfg)
         output = local_api.call(
             text=text,
             api_key_file=api_key_file,
@@ -272,6 +326,8 @@ def cmd_direct_call(args: argparse.Namespace) -> int:
     from services.app.one_aifw_api import OneAIFWAPI  # lazy import
     from services.app.llm_client import LLMClient, load_llm_api_config
     api = OneAIFWAPI()
+    if mask_cfg:
+        _configure_api_instance(api, mask_cfg)
     language = api._analyzer_wrapper.detect_language(text)
     anon = api._anonymizer_wrapper.anonymize(text=text, operators=None, language=language)
     anonymized_text = anon.get('text', '')
@@ -296,6 +352,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     # Launch FastAPI service using uvicorn in background
     # Load config
     cfg, _ = _find_and_load_config(getattr(args, 'config', None), getattr(args, 'work_dir', None))
+    mask_cfg = _mask_config_from_cfg(cfg)
     port = int(_get_effective_with_env(getattr(args, 'port', None), ['AIFW_PORT'], cfg.get('port'), args.port or 8844))
     env = os.environ.copy()
 
@@ -403,7 +460,16 @@ def cmd_launch(args: argparse.Namespace) -> int:
             cwd=PROJECT_ROOT,
         )
         pidfile = _write_pidfile_with_fallbacks(work_dir, port, proc.pid)
-        time.sleep(0.3)
+        # Wait until server is healthy, then apply maskConfig (if any) before returning.
+        if not _wait_for_health(port, timeout_s=15.0):
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                pass
+            print(f"Error: aifw failed to start (health check timeout) at http://localhost:{port}.")
+            return 2
+        if mask_cfg and not _apply_mask_config_http(port, mask_cfg, cfg, args):
+            print("warning: failed to apply mask_config via /api/config; service is running but may use default maskConfig.")
         print(f"aifw is running at http://localhost:{port}.")
         if not pidfile:
             print("warning: failed to write pidfile (try --work-dir ~/.aifw or set AIFW_WORK_DIR)")
@@ -438,7 +504,17 @@ def cmd_launch(args: argparse.Namespace) -> int:
             )
         # Write pidfile under work_dir (with fallback)
         pidfile = _write_pidfile_with_fallbacks(work_dir, port, proc.pid)
-        time.sleep(0.6)
+        # Wait until server is healthy, then apply maskConfig (if any) before returning.
+        if not _wait_for_health(port, timeout_s=15.0):
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                pass
+            print(f"Error: aifw failed to start (health check timeout) at http://localhost:{port}.")
+            print(f"logs: {log_file}")
+            return 2
+        if mask_cfg and not _apply_mask_config_http(port, mask_cfg, cfg, args):
+            print("warning: failed to apply mask_config via /api/config; service is running but may use default maskConfig.")
         print(f"aifw is running at http://localhost:{port}.")
         print(f"logs: {log_file}")
         if not pidfile:
