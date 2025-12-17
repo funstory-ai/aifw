@@ -54,7 +54,8 @@ class AnonymizerWrapper:
         if isinstance(mask_all, bool):
             return mask_all
 
-        # Defaults per docs: most true except address false.
+        # Align with core default bits (aifw_default_mask_bits):
+        # enable all except physical address.
         defaults: Dict[str, bool] = {
             "maskAddress": False,
             "maskEmail": True,
@@ -85,16 +86,20 @@ class AnonymizerWrapper:
             "PHONE_NUMBER": "maskPhoneNumber",
             "BANK_NUMBER": "maskBankNumber",
             "PAYMENT": "maskPayment",
+            # Accept both names (core uses VERIFICATION_CODE)
             "VERIFY_CODE": "maskVerificationCode",
+            "VERIFICATION_CODE": "maskVerificationCode",
             "PASSWORD": "maskPassword",
             "RANDOM_SEED": "maskRandomSeed",
             "PRIVATE_KEY": "maskPrivateKey",
+            # Accept both names (core uses URL_ADDRESS)
             "URL": "maskUrl",
+            "URL_ADDRESS": "maskUrl",
         }
         key = mapping.get(str(entity_type or "").upper())
         if not key:
-            # For unknown entities, keep backward-compatible behavior: mask by default.
-            return True
+            # Align with core: unknown/unsupported types are never masked.
+            return False
         return bool(effective.get(key, True))
 
     def anonymize(self, text: str, operators: Optional[Dict[str, Dict[str, Any]]] = None, language: str = 'en'):
