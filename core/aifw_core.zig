@@ -294,7 +294,7 @@ pub const MaskConfig = extern struct {
             .PHYSICAL_ADDRESS => ENABLE_MASK_ADDR_BIT,
             .EMAIL_ADDRESS => ENABLE_MASK_EMAIL_BIT,
             .ORGANIZATION => ENABLE_MASK_ORG_BIT,
-            .USER_MAME => ENABLE_MASK_USER_NAME_BIT,
+            .USER_NAME => ENABLE_MASK_USER_NAME_BIT,
             .PHONE_NUMBER => ENABLE_MASK_PHONE_NUMBER_BIT,
             .BANK_NUMBER => ENABLE_MASK_BANK_NUMBER_BIT,
             .PAYMENT => ENABLE_MASK_PAYMENT_BIT,
@@ -911,7 +911,7 @@ test "session mask/restore with meta" {
 
     const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
     const ner_entities = [_]NerRecogEntity{
-        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
+        .{ .entity_type = .USER_NAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
     };
 
     var out_meta_ptr: *anyopaque = undefined;
@@ -993,7 +993,7 @@ test "session restore_with_meta with empty masked text frees meta and returns nu
 
     const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
     const ner_entities = [_]NerRecogEntity{
-        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
+        .{ .entity_type = .USER_NAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
     };
 
     var out_meta_ptr: *anyopaque = undefined;
@@ -1025,12 +1025,12 @@ test "session get PII spans" {
 
     const input = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
     const ner_entities = [_]NerRecogEntity{
-        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
+        .{ .entity_type = .USER_NAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
     };
     const expected_pii_spans = &[_]MatchedPIISpan{
         .{ .entity_id = 1, .entity_type = .EMAIL_ADDRESS, .matched_start = 12, .matched_end = 25, .score = 0.9 },
         .{ .entity_id = 2, .entity_type = .URL_ADDRESS, .matched_start = 36, .matched_end = 56, .score = 0.8 },
-        .{ .entity_id = 3, .entity_type = .USER_MAME, .matched_start = 68, .matched_end = 77, .score = 0.98 },
+        .{ .entity_id = 3, .entity_type = .USER_NAME, .matched_start = 68, .matched_end = 77, .score = 0.98 },
     };
     const pii_spans = try session.get_pii_spans(input, &ner_entities, .en);
     defer allocator.free(pii_spans);

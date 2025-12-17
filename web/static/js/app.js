@@ -289,7 +289,7 @@ class AIFWApp {
             'PHYSICAL_ADDRESS': '地址',
             'EMAIL_ADDRESS': '邮箱地址',
             'ORGANIZATION': '组织',
-            'USER_MAME': '人名',
+            'USER_NAME': '人名',
             'PHONE_NUMBER': '电话号码',
             'BANK_NUMBER': '银行账户',
             'PAYMENT': '支付账号',

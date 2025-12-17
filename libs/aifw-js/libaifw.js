@@ -920,7 +920,7 @@ export async function getPiiSpans(inputText, language) {
         case 1: return 'PHYSICAL_ADDRESS';
         case 2: return 'EMAIL_ADDRESS';
         case 3: return 'ORGANIZATION';
-        case 4: return 'USER_MAME';
+        case 4: return 'USER_NAME';
         case 5: return 'PHONE_NUMBER';
         case 6: return 'BANK_NUMBER';
         case 7: return 'PAYMENT';

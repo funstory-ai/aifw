@@ -30,7 +30,7 @@ pub const NerRecogData = extern struct {
 // };
 
 pub const NerRecogEntity = extern struct {
-    /// The type of the entity, for example, .USER_MAME, .ORGANIZATION, .PHYSICAL_ADDRESS, etc.
+    /// The type of the entity, for example, .USER_NAME, .ORGANIZATION, .PHYSICAL_ADDRESS, etc.
     entity_type: EntityType,
     entity_tag: EntityBioTag,
 

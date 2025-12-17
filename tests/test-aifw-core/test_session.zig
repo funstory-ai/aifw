@@ -22,8 +22,8 @@ fn test_session_mask_and_restore_with_meta() !void {
 
     // const input1 = "Hi, my email is example.test@funstory.com, my phone number is 13800138027, my name is John Doe";
     // const ner_entities1 = [_]core.NerRecognizer.NerRecogEntity{
-    //     .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 14, .start = 86, .end = 90 },
-    //     .{ .entity_type = .USER_MAME, .entity_tag = .Inside, .score = 0.98, .index = 15, .start = 91, .end = 94 },
+    //     .{ .entity_type = .USER_NAME, .entity_tag = .Begin, .score = 0.98, .index = 14, .start = 86, .end = 90 },
+    //     .{ .entity_type = .USER_NAME, .entity_tag = .Inside, .score = 0.98, .index = 15, .start = 91, .end = 94 },
     // };
     const input1 = "我的家庭住址：成都市高新区天府大道100号";
     const ner_entities1 = [_]core.NerRecognizer.NerRecogEntity{
@@ -49,7 +49,7 @@ fn test_session_mask_and_restore_with_meta() !void {
 
     const input2 = "Contact me: a.b+1@test.io and visit https://ziglang.org, my name is John Doe.";
     const ner_entities2 = [_]core.NerRecognizer.NerRecogEntity{
-        .{ .entity_type = .USER_MAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
+        .{ .entity_type = .USER_NAME, .entity_tag = .Begin, .score = 0.98, .index = 10, .start = 68, .end = 77 },
     };
     var masked_text2: [*:0]u8 = undefined;
     var mask_meta_data2: *anyopaque = undefined;

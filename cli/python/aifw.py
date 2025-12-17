@@ -937,7 +937,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cfg.add_argument("--mask-address", help="Enable/disable masking PHYSICAL_ADDRESS (true/false)")
     p_cfg.add_argument("--mask-email", help="Enable/disable masking EMAIL_ADDRESS (true/false)")
     p_cfg.add_argument("--mask-organization", help="Enable/disable masking ORGANIZATION (true/false)")
-    p_cfg.add_argument("--mask-user-name", help="Enable/disable masking USER_MAME (true/false)")
+    p_cfg.add_argument("--mask-user-name", help="Enable/disable masking USER_NAME (true/false)")
     p_cfg.add_argument("--mask-phone-number", help="Enable/disable masking PHONE_NUMBER (true/false)")
     p_cfg.add_argument("--mask-bank-number", help="Enable/disable masking BANK_NUMBER (true/false)")
     p_cfg.add_argument("--mask-payment", help="Enable/disable masking PAYMENT (true/false)")

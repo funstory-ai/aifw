@@ -38,7 +38,7 @@
     - `maskAddress` (Boolean): 是否匿名化物理地址（PHYSICAL_ADDRESS），缺省值是false。
     - `maskEmail` (Boolean): 是否匿名化邮箱地址（EMAIL_ADDRESS），缺省值是true。
     - `maskOrganization` (Boolean): 是否匿名化组织/公司名（ORGANIZATION），缺省值是true。
-    - `maskUserName` (Boolean): 是否匿名化人名/用户名（USER_MAME），缺省值是true。
+    - `maskUserName` (Boolean): 是否匿名化人名/用户名（USER_NAME），缺省值是true。
     - `maskPhoneNumber` (Boolean): 是否匿名化电话号码（PHONE_NUMBER），缺省值是true。
     - `maskBankNumber` (Boolean): 是否匿名化银行卡号（BANK_NUMBER），缺省值是true。
     - `maskPayment` (Boolean): 是否匿名化支付相关信息（PAYMENT），缺省值是true。
@@ -162,7 +162,7 @@ await deinit();
   - `maskAddress` (Boolean): 是否匿名化物理地址（PHYSICAL_ADDRESS），缺省值是 false。
   - `maskEmail` (Boolean): 是否匿名化邮箱地址（EMAIL_ADDRESS），缺省值是 true。
   - `maskOrganization` (Boolean): 是否匿名化组织/公司名（ORGANIZATION），缺省值是 true。
-  - `maskUserName` (Boolean): 是否匿名化人名/用户名（USER_MAME），缺省值是 true。
+  - `maskUserName` (Boolean): 是否匿名化人名/用户名（USER_NAME），缺省值是 true。
   - `maskPhoneNumber` (Boolean): 是否匿名化电话号码（PHONE_NUMBER），缺省值是 true。
   - `maskBankNumber` (Boolean): 是否匿名化银行卡号（BANK_NUMBER），缺省值是 true。
   - `maskPayment` (Boolean): 是否匿名化支付相关信息（PAYMENT），缺省值是 true。

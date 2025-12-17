@@ -291,7 +291,7 @@ export function buildNerEntitiesBuffer(wasm, items, jsText) {
     PHYSICAL_ADDRESS: 1,
     EMAIL_ADDRESS: 2,
     ORGANIZATION: 3,
-    USER_MAME: 4,
+    USER_NAME: 4,
     PHONE_NUMBER: 5,
     BANK_NUMBER: 6,
     PAYMENT: 7,
@@ -315,7 +315,7 @@ export function buildNerEntitiesBuffer(wasm, items, jsText) {
   };
   const toEntityType = (core) => {
     switch (core) {
-      case 'PER': case 'PERSON': return EntityType.USER_MAME;
+      case 'PER': case 'PERSON': return EntityType.USER_NAME;
       case 'ORG': return EntityType.ORGANIZATION;
       case 'LOC': case 'GPE': case 'FAC': case 'ADDRESS':
         return EntityType.PHYSICAL_ADDRESS;

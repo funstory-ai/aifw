@@ -67,7 +67,7 @@ _ENTITY_TYPE_ID_TO_NAME: Dict[int, str] = {
     1: "PHYSICAL_ADDRESS",
     2: "EMAIL_ADDRESS",
     3: "ORGANIZATION",
-    4: "USER_MAME",
+    4: "USER_NAME",
     5: "PHONE_NUMBER",
     6: "BANK_NUMBER",
     7: "PAYMENT",

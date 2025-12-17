@@ -8,7 +8,7 @@ pub const EntityType = enum(u8) {
     PHYSICAL_ADDRESS,
     EMAIL_ADDRESS,
     ORGANIZATION,
-    USER_MAME,
+    USER_NAME,
     PHONE_NUMBER,
     BANK_NUMBER,
     PAYMENT,
